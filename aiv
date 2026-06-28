@@ -5,7 +5,7 @@
 #######################################################################
 # 
 # === Initialize Shell Environment ====================================
-set -u
+set -euo pipefail
 umask 0022
 export LC_ALL='C'
 export PATH="$(command -p getconf PATH)${PATH:+:}:${PATH:-}"
@@ -341,7 +341,7 @@ fi
 
 # === End If We Have Only Context =====================================
 if [ -z "$PROMPT_ARG" ] &&
-   printf '%s\n' "${CONTXT_FILE[@]}" | grep -Fxq '-';
+  printf '%s\n' "${CONTXT_FILE[@]}" | grep -Fxq '-';
 then
   exit 0
 fi
@@ -351,27 +351,22 @@ fi
 # Anthropic
 URL="https://api.anthropic.com/v1/messages"
 BODY_PARTS="{\"model\":\"$MODEL\",\"max_tokens\":$MAX_TOKENS,"
-HEADERS=$(cat <<HEADERS
+
+command -v curl >/dev/null 2>&1 || error_exit 1 "curl not found"
+
+HEADER_ARGS=()
+while IFS= read -r line; do
+  [ -n "$line" ] && HEADER_ARGS+=(-H "$line")
+done <<EOF
 x-api-key: $API_KEY
 anthropic-version: 2023-06-01
 content-type: application/json
-HEADERS
-)
-
-REQ_CMD=
-if command -v curl >/dev/null 2>&1; then
-  HEADERS=$(printf "%s" "$HEADERS"                    |
-            sed 's/.*/-H "&" /'                       |
-            tr -d '\n')
-  REQ_CMD="curl -s $URL $HEADERS -d @-"
-else
-  error_exit 1 "curl not found"
-fi
+EOF
 
 cat "$CONVERSATION"                                   |
 sed -e '1s/^/'"$BODY_PARTS"'/' -e '$s/$/]}/'          |
 tr -d '\n'                                            |
-eval "$REQ_CMD"                                       |
+curl -s "$URL" "${HEADER_ARGS[@]}" -d @-              |
 sed 's/.*"content":\[{\(.*"}\)\],.*/\1/'              |
 sed 's/.*"text":\(".*[^\]}\)$/\1/'                    |
 sed 's/^/,{"role": "assistant", "content": /'         |

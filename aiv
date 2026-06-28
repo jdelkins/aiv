@@ -350,9 +350,11 @@ fi
 
 # Anthropic
 URL="https://api.anthropic.com/v1/messages"
+[ -n "$API_KEY" ] || error_exit 1 "api_key not set"
 [ -n "$MODEL" ] || error_exit 1 "model not set"
 [ -n "$MAX_TOKENS" ] || error_exit 1 "max_tokens not set"
 printf '%s' "$MAX_TOKENS" | grep -Eq '^[0-9]+$' || error_exit 1 "max_tokens must be a positive integer"
+API_KEY=$(printf '%s' "$API_KEY" | tr -cd '[:alnum:]._-')
 MODEL=$(printf '%s' "$MODEL" | tr -cd '[:alnum:]._-')
 BODY_PARTS="{\"model\":\"$MODEL\",\"max_tokens\":$MAX_TOKENS,"
 

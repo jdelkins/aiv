@@ -290,7 +290,7 @@ awk '                                                 #
       # Print sec with location                       #
       if (sec_type == "ctx") {                        #
         printf("---CONTEXT_TXT:%s---\n", loc)         #
-      } else if (sec_type = "stdin") {                #
+      } else if (sec_type == "stdin") {               #
         printf("---STDIN:%s---\n", loc)               #
       }                                               #
       print sec_cont                                  #

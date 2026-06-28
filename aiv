@@ -69,20 +69,13 @@ json_escape() {
 
 json_extract() {
   awk '{
-    gsub(/\\\\n/, "\n")
-    gsub(/\\n/, "\n")
-    gsub(/\\\\t/, "\t")
-    gsub(/\\t/, "\t")
-    gsub(/\\\\r/, "\r")
-    gsub(/\\r/, "\r")
-    gsub(/\\\\b/, "\b")
-    gsub(/\\b/, "\b")
-    gsub(/\\\\f/, "\f")
-    gsub(/\\f/, "\f")
-    gsub(/\\\\"/, "\"")
-    gsub(/\\"/, "\"")
-    gsub(/\\\\\\\\/, "\\")
-    gsub(/\\\\/, "\\")
+    gsub(/\\\\n/, "\\n")
+    gsub(/\\\\t/, "\\t")
+    gsub(/\\\\r/, "\\r")
+    gsub(/\\\\b/, "\\b")
+    gsub(/\\\\f/, "\\f")
+    gsub(/\\\\"/, "\\\"")
+    gsub(/\\\\\\\\/, "\\\\")
     gsub(/^"|"$/, "")
     print
   }'

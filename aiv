@@ -69,10 +69,17 @@ json_escape() {
 
 json_extract() {
   awk '{
+    placeholder = "\001"
     if (substr($0, 1, 1) == "\"") $0 = substr($0, 2)
     if (substr($0, length($0), 1) == "\"" && substr($0, length($0)-1, 1) != "\\") $0 = substr($0, 1, length($0)-1)
-    gsub(/\\\\/, "\\")
+    gsub(/\\\\/, placeholder)
+    gsub(/\\n/, "\n")
+    gsub(/\\t/, "\t")
+    gsub(/\\r/, "\r")
+    gsub(/\\b/, "\b")
+    gsub(/\\f/, "\f")
     gsub(/\\"/, "\"")
+    gsub(placeholder, "\\")
     print
   }'
 }

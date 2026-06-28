@@ -126,10 +126,10 @@ CONTXT_FILE=
 EXTEND_PREV=
 REPEAT_INPT=
 PROMPT_ARG=
-while getopts :c:earm:s:h opt
+while getopts :c:erm:s:hv opt
 do
   case $opt in
-    c)      CONTXT_FILE="$CONTXT_FILE $OPTARG"       ;;
+    c)      CONTXT_FILE="${CONTXT_FILE:+$CONTXT_FILE}$OPTARG" ;;
     e)      EXTEND_PREV=true                         ;;
     r)      REPEAT_INPT=true                         ;;
     m)      MODEL="$OPTARG"                          ;;

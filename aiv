@@ -142,7 +142,7 @@ shift $((OPTIND - 1))
 PROMPT_ARG="$*"
 
 # === Ensure Conversation File ========================================
-touch $CONVERSATION
+touch "$CONVERSATION"
 
 if [ ! -f "$CONVERSATION" ] || [ "$EXTEND_PREV" != "true" ]; then
   if [ -n "$SYS_PROMPT" ]; then

@@ -355,7 +355,8 @@ HEADERS=$(cat <<HEADERS
 x-api-key: $API_KEY
 anthropic-version: 2023-06-01
 content-type: application/json
-HEADERS)
+HEADERS
+)
 
 REQ_CMD=
 if command -v curl >/dev/null 2>&1; then

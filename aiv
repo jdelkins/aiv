@@ -350,6 +350,10 @@ fi
 
 # Anthropic
 URL="https://api.anthropic.com/v1/messages"
+[ -n "$MODEL" ] || error_exit 1 "model not set"
+[ -n "$MAX_TOKENS" ] || error_exit 1 "max_tokens not set"
+printf '%s' "$MAX_TOKENS" | grep -Eq '^[0-9]+$' || error_exit 1 "max_tokens must be a positive integer"
+MODEL=$(printf '%s' "$MODEL" | tr -cd '[:alnum:]._-')
 BODY_PARTS="{\"model\":\"$MODEL\",\"max_tokens\":$MAX_TOKENS,"
 
 command -v curl >/dev/null 2>&1 || error_exit 1 "curl not found"

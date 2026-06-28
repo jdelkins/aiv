@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 #######################################################################
 # Initial Configuration
@@ -122,14 +122,14 @@ END
 
 # === Parse Arguments =================================================
 
-CONTXT_FILE=
+CONTXT_FILE=()
 EXTEND_PREV=
 REPEAT_INPT=
 PROMPT_ARG=
 while getopts :c:erm:s:hv opt
 do
   case $opt in
-    c)      CONTXT_FILE="${CONTXT_FILE:+$CONTXT_FILE}$OPTARG" ;;
+    c)      CONTXT_FILE+=("$OPTARG")                 ;;
     e)      EXTEND_PREV=true                         ;;
     r)      REPEAT_INPT=true                         ;;
     m)      MODEL="$OPTARG"                          ;;
@@ -162,12 +162,12 @@ fi
 #######################################################################
  
 # === Build Contents ==================================================
-awk -v ctx="$CONTXT_FILE" -v prompt="$PROMPT_ARG"   ' #
+awk -v ctx="$(printf '%s|' "${CONTXT_FILE[@]}")" -v prompt="$PROMPT_ARG"   ' #
     BEGIN {                                           #
       pipe_status = system("test -t 0")               #
       pipe_exists = (pipe_status != 0)                #
       if (length(ctx) > 0) {                          #
-        split(ctx, temp_files, " ")                   #
+        split(ctx, temp_files, "|")                   #
         for (i in temp_files) {                       #
           if (temp_files[i] != "-" &&                 #
                 length(temp_files[i]) > 0) {          #
@@ -341,7 +341,7 @@ fi
 
 # === End If We Have Only Context =====================================
 if [ -z "$PROMPT_ARG" ] &&
-   printf "%s" "$CONTXT_FILE" | grep -Eq '(^-| - |-$)';
+   printf '%s\n' "${CONTXT_FILE[@]}" | grep -Fxq '-';
 then
   exit 0
 fi

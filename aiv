@@ -324,7 +324,7 @@ json_escape                                           |
 sed 's/^\(.*\)$/{"role":"user","content": "\1"}/'     |
 {                                                     #
   if [ -s "$CONVERSATION" ] &&                        #
-    tail -c 2 "$CONVERSATION" | grep -q '\[';         #
+    grep -q '\[$' "$CONVERSATION"                     #
   then                                                #
     cat                                               #
   else                                                #

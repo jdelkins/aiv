@@ -144,7 +144,7 @@ PROMPT_ARG="$*"
 # === Ensure Conversation File ========================================
 touch "$CONVERSATION"
 
-if [ ! -f "$CONVERSATION" ] || [ "$EXTEND_PREV" != "true" ]; then
+if [ "$EXTEND_PREV" != "true" ]; then
   if [ -n "$SYS_PROMPT" ]; then
     printf "%s" "$SYS_PROMPT"                         |
     json_escape                                       |

@@ -17,6 +17,7 @@ location detection.
 - **Token-efficient context storage** - when only `-c` option is used without
   a prompt and normal stdin, context is saved to conversation file without making
   API requests
+- **Per-request output mode control** via `-C` (conversational) and `-X` (code-only) flags
 
 
 ## Installation
@@ -24,20 +25,20 @@ location detection.
 ### With Nix (recommended)
 
 ```bash
-nix run github:o8vm/aiv
+nix run github:jdelkins/aiv
 ```
 
 Or install into your profile:
 
 ```bash
-nix profile install github:o8vm/aiv
+nix profile install github:jdelkins/aiv
 ```
 
 ### Manual
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/o8vm/aiv.git
+   git clone https://github.com/jdelkins/aiv.git
    ```
 
 2. Install dependencies:
@@ -50,18 +51,33 @@ nix profile install github:o8vm/aiv
    chmod +x aiv.py
    ```
 
-4. Create a configuration directory and file:
+## Configuration
+
+1. Create a configuration directory and file:
    ```bash
    mkdir -p ~/.config/aiv
    ```
 
-5. Configure your API settings in `~/.config/aiv/config`:
+2. Configure your API settings in `~/.config/aiv/config`:
    ```
    API_KEY="your_anthropic_api_key"
    MODEL="claude-sonnet-4-20250514"
    MAX_TOKENS=4096
-   SYS_PROMPT="You are an expert programmer and a shell master and an expert support engineer. You value code efficiency and clarity above all things. What you write will be piped in and out of cli programs so you do not explain anything unless explicitly asked to. Never write ``` around your answer, provide only the result of the task you are given. Preserve input formatting."
+   SYS_PROMPT="You are an expert programmer and a shell master and an expert support engineer. You value code efficiency and clarity above all things. What you write will be piped in and out of CLI programs, so do not explain anything unless explicitly asked to. In conversational responses, you may use markdown formatting including triple backticks where it aids readability. When providing direct output intended for piping, avoid triple backticks and provide only the raw result. Preserve input formatting. If I say \"code only\" or similar, please provide only code responses, without wrapping them in markdown; however, in this case, if you have important information, caveats, or usage nuances, feel free to include that information in a code comment."
    ```
+
+### About the SYS_PROMPT setting
+
+   The recommended system prompt above establishes a baseline personality and
+   output style for the AI: terse, pipe-friendly, and format-aware. By default the
+   model avoids unsolicited explanation and preserves input formatting, making it
+   safe to use in shell pipelines. `aiv` passes this prompt unchanged to the API
+   on every request. The `-C` and `-X` flags then layer per-request formatting
+   instructions directly onto the user prompt — `-C` nudges the model toward
+   markdown and readable formatting for conversational use, while `-X` instructs it
+   to emit raw code only with caveats as comments. This separation means the system
+   prompt sets a sensible default, and the mode flags override formatting behaviour
+   only for the turn they are applied to, without permanently altering the session.
 
 ## Usage
 
@@ -74,9 +90,16 @@ aiv [options] [prompt]
 - `-c [pattern|-]`: Add context from files (glob pattern) or stdin (-)
 - `-r`: Repeat the input before output (useful for editor insertion)
 - `-R, --reset`: Reset conversation thread
+- `-C`: Conversational mode — appends formatting instructions to the user prompt
+  that encourage markdown output with triple backticks where appropriate
+- `-X`: Code-only mode — appends formatting instructions to the user prompt that
+  suppress markdown and triple backtick fences; caveats are emitted as code comments.
+  Recommended when piping output back into an editor or shell pipeline.
 - `-m MODEL`: Use specified model
 - `-s [prompt]`: Override system prompt
 - `-h, -v`: Display help/version information
+
+Note: `-C` and `-X` are mutually exclusive.
 
 ## Examples
 
@@ -90,6 +113,9 @@ aiv "How do I find files modified in the last 24 hours?"
 
 # Code explanation
 aiv "Explain what this regex does: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'"
+
+# Conversational mode with markdown formatting
+aiv -C "Walk me through the tradeoffs of different caching strategies"
 ```
 
 ### Working with Files
@@ -122,13 +148,13 @@ df -h | aiv "Analyze disk usage and suggest optimizations"
 ### Conversation Workflows
 ```bash
 # Start a technical discussion
-aiv "I need to design a caching system for a web API"
+aiv -C "I need to design a caching system for a web API"
 
 # Continue the conversation (state is preserved automatically)
-aiv "What about using Redis vs in-memory caching?"
+aiv -C "What about using Redis vs in-memory caching?"
 
 # Add specific context
-aiv -c current_api.py "How would this integrate with my existing API?"
+aiv -C -c current_api.py "How would this integrate with my existing API?"
 
 # Start a fresh topic
 aiv -R "Completely unrelated question"
@@ -156,12 +182,15 @@ echo "This function isn't working as expected" | aiv -c buggy_code.py -c -
 python test.py 2>&1 | aiv -c -
 
 # Continue troubleshooting
-aiv "This is the test output. What specific changes should I make?"
+aiv -C "This is the test output. What specific changes should I make?"
 ```
 
 ## Editor Integration (Helix)
 
-AIV is optimized for Helix editor workflows:
+AIV is optimized for Helix editor workflows. When piping text into and out of the
+tool, use the `-X` flag to ensure responses are in code-ready format — no markdown
+fences, no prose wrapping, just the raw output suitable for insertion into your
+buffer.
 
 ### 1. Add Selected Text to Context (`Alt+|`)
 Select code in Helix and use pipe-ignore to add context without output:
@@ -172,13 +201,13 @@ aiv -c -
 ### 2. Generate Code After Selection (`|`)
 After adding context, generate new content that gets inserted after your selection:
 ```bash
-aiv -r "generate unit tests for this function"
+aiv -X -r "generate unit tests for this function"
 ```
 
 ### 3. Replace Selection with AI Response (`|`)
 Replace selected text with AI-generated content:
 ```bash
-aiv "refactor this code for better performance"
+aiv -X "refactor this code for better performance"
 ```
 
 ### 4. Shell Command Integration (`!`)
@@ -188,6 +217,20 @@ aiv [-c "./*"] "create a README for this project"
 ```
 
 ## Mechanism
+
+### Output Mode Flags (-C and -X)
+
+Rather than modifying the system prompt, `-C` and `-X` append a formatting
+instruction to the user prompt for that specific request. This means:
+
+- The system prompt is never altered, avoiding conflicts with your configured `SYS_PROMPT`
+- The instruction is scoped to a single turn — subsequent messages are unaffected
+  unless the flag is passed again
+- The conversation JSON reflects exactly what was sent, making behaviour easy to inspect
+
+Use `-C` for interactive, readable responses during exploration or discussion.
+Use `-X` whenever output will be piped into an editor, written to a file, or
+consumed by another tool.
 
 ### Smart Location Detection
 
@@ -245,6 +288,9 @@ echo ".aiv-conversation.json" >> ~/.gitignore_global
 - **`-r` flag behaviour**: The shell version attempted to extract and repeat
   only the stdin portion of the input. The Python version repeats the prompt
   argument only.
+- **Output mode flags**: `-C` and `-X` are new. They inject per-request
+  formatting instructions into the user prompt rather than altering the system
+  prompt, keeping behaviour predictable and the system prompt stable.
 
 ## License
 

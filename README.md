@@ -1,37 +1,61 @@
 # AIV - AI Valve: Pipes for AI
 
-AIV is a shell-based command-line utility designed for seamless integration with text editors and terminal workflows. It allows you to interact with AI models through Unix pipes while maintaining conversation context and providing intelligent code location detection.
+AIV is a Python command-line utility designed for seamless integration with text
+editors and terminal workflows. It allows you to interact with AI models through
+Unix pipes while maintaining conversation context and providing intelligent code
+location detection.
 
 ## Features
 
 - **Editor-optimized design** for seamless integration with Helix and other editors
 - **Terminal-friendly interface** for command-line workflows and automation
 - **Smart context detection** that automatically identifies source files and line locations
-- **Conversation history** with thread continuation support
+- **Per-project conversation state** scoped to the current git repository
 - **Pipe-friendly interface** that works with any Unix tool
 - **Flexible input handling** supporting files, globs, and stdin
-- **Real-time conversation management** with persistent state
-- **Token-efficient context storage** - when only `-c` option is used without a prompt and normal stdin, context is saved to conversation file without making API requests
+- **Real-time streaming responses** via the Anthropic Python SDK
+- **Token-efficient context storage** - when only `-c` option is used without
+  a prompt and normal stdin, context is saved to conversation file without making
+  API requests
 
 
 ## Installation
+
+### With Nix (recommended)
+
+```bash
+nix run github:o8vm/aiv
+```
+
+Or install into your profile:
+
+```bash
+nix profile install github:o8vm/aiv
+```
+
+### Manual
 
 1. Clone the repository:
    ```bash
    git clone https://github.com/o8vm/aiv.git
    ```
 
-2. Make the script executable:
+2. Install dependencies:
    ```bash
-   chmod +x aiv
+   pip install anthropic
    ```
 
-3. Create a configuration directory and file:
+3. Make the script executable:
+   ```bash
+   chmod +x aiv.py
+   ```
+
+4. Create a configuration directory and file:
    ```bash
    mkdir -p ~/.config/aiv
    ```
 
-4. Configure your API settings in `~/.config/aiv/config`:
+5. Configure your API settings in `~/.config/aiv/config`:
    ```
    API_KEY="your_anthropic_api_key"
    MODEL="claude-sonnet-4-20250514"
@@ -49,7 +73,7 @@ aiv [options] [prompt]
 
 - `-c [pattern|-]`: Add context from files (glob pattern) or stdin (-)
 - `-r`: Repeat the input before output (useful for editor insertion)
-- `-e`: Continue previous conversation thread
+- `-R, --reset`: Reset conversation thread
 - `-m MODEL`: Use specified model
 - `-s [prompt]`: Override system prompt
 - `-h, -v`: Display help/version information
@@ -100,14 +124,14 @@ df -h | aiv "Analyze disk usage and suggest optimizations"
 # Start a technical discussion
 aiv "I need to design a caching system for a web API"
 
-# Continue the conversation
-aiv -e "What about using Redis vs in-memory caching?"
+# Continue the conversation (state is preserved automatically)
+aiv "What about using Redis vs in-memory caching?"
 
 # Add specific context
-aiv -c current_api.py -e "How would this integrate with my existing API?"
+aiv -c current_api.py "How would this integrate with my existing API?"
 
-# Get implementation details
-aiv -e "Show me Python code for the Redis implementation"
+# Start a fresh topic
+aiv -R "Completely unrelated question"
 ```
 
 ### Multi-context Analysis
@@ -120,7 +144,7 @@ cat error.log | aiv -c "src/*.py" -c config.yaml "Why am I getting these errors?
 
 # Add context and generate
 cat hoge.rs | aiv -c - -c "src/*.rs"
-aiv -e "explain this context"
+aiv "explain this context"
 ```
 
 ### Debugging Session
@@ -129,10 +153,10 @@ aiv -e "explain this context"
 echo "This function isn't working as expected" | aiv -c buggy_code.py -c -
 
 # Add test output
-python test.py 2>&1 | aiv -c - -e
+python test.py 2>&1 | aiv -c -
 
 # Continue troubleshooting
-aiv -e "This is test output. What specific changes should I make?"
+aiv "This is the test output. What specific changes should I make?"
 ```
 
 ## Editor Integration (Helix)
@@ -142,25 +166,25 @@ AIV is optimized for Helix editor workflows:
 ### 1. Add Selected Text to Context (`Alt+|`)
 Select code in Helix and use pipe-ignore to add context without output:
 ```bash
-aiv -c - [-e]
+aiv -c -
 ```
 
 ### 2. Generate Code After Selection (`|`)
 After adding context, generate new content that gets inserted after your selection:
 ```bash
-aiv -r -e "generate unit tests for this function"
+aiv -r "generate unit tests for this function"
 ```
 
 ### 3. Replace Selection with AI Response (`|`)
 Replace selected text with AI-generated content:
 ```bash
-aiv -e "refactor this code for better performance"
+aiv "refactor this code for better performance"
 ```
 
 ### 4. Shell Command Integration (`!`)
 Use shell commands to generate content at cursor position:
 ```bash
-aiv [-e] [-c "./*"] "create a README for this project"
+aiv [-c "./*"] "create a README for this project"
 ```
 
 ## Mechanism
@@ -182,12 +206,45 @@ When using only the `-c` option without providing a prompt and normal stdin:
 - No output is generated
 - Useful for building up context before asking questions
 
+### Per-Project Conversation State
+
+AIV scopes conversation history to the current git repository:
+- Inside a git repo, state is stored in `.aiv-conversation.json` at the repo root
+- Outside any git repo, state falls back to `~/.config/aiv/conversation.json`
+- Conversation is preserved across invocations by default
+- Use `-R` or `--reset` to start a fresh conversation
+
+It is recommended to add `.aiv-conversation.json` to your global gitignore:
+```bash
+echo ".aiv-conversation.json" >> ~/.gitignore_global
+```
+
 ### File Management
 
-- **Conversation history**: `~/.config/aiv/conversation`
+- **Conversation history (in repo)**: `.aiv-conversation.json` at repo root
+- **Conversation history (fallback)**: `~/.config/aiv/conversation.json`
 - **Configuration**: `~/.config/aiv/config`
 
-The conversation file maintains context between sessions, allowing you to continue discussions across terminal and editor sessions.
+## Differences from Shell Version
+
+- **Conversation file**: Now stored as JSON. Existing conversation files from
+  the shell version are not compatible.
+- **Conversation is preserved by default**: The shell version required `-e` to
+  continue a thread. The Python version preserves state automatically; use
+  `-R`/`--reset` to start fresh.
+- **Per-project state**: Conversation is scoped to the git repo root rather than
+  being a single global file.
+- **Glob expansion**: The shell version relied on the shell to expand glob
+  patterns before they reached the script when unquoted. The Python version
+  handles glob expansion internally and behaves consistently whether patterns are
+  quoted or unquoted.
+- **No curl dependency**: HTTP is handled natively via the Anthropic Python SDK
+  rather than shelling out to `curl`.
+- **Streaming**: Responses are streamed to stdout in real time as before, but
+  via the SDK's streaming interface rather than raw HTTP chunked transfer.
+- **`-r` flag behaviour**: The shell version attempted to extract and repeat
+  only the stdin portion of the input. The Python version repeats the prompt
+  argument only.
 
 ## License
 
@@ -195,4 +252,6 @@ MIT License
 
 ---
 
-AIV transforms both your terminal and editor into an AI-powered development environment, making it easy to get contextual assistance without disrupting your workflow.
+AIV transforms both your terminal and editor into an AI-powered development
+environment, making it easy to get contextual assistance without disrupting
+your workflow.

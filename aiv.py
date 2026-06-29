@@ -13,15 +13,15 @@ CONFIG_FILE = CONFIG_DIR / "config"
 FALLBACK_CONVERSATION_FILE = CONFIG_DIR / "conversation.json"
 LOCAL_CONVERSATION_FILE = Path(".aiv-conversation.json")
 
-MODE_CHAT = (
-    "The user is interacting in conversational/REPL mode. "
-    "Use markdown formatting including triple backticks where it aids readability."
-)
-MODE_CODE = (
-    "The user is interacting in code-only mode. "
-    "Provide only raw code without markdown wrapping or triple backticks. "
-    "If you have important information, caveats, or usage nuances, "
-    "include them as code comments rather than prose."
+# -C mode: appended to user prompt to nudge toward markdown formatting
+MODE_CHAT_SUFFIX = "\n\nRespond using markdown formatting including triple backticks where it aids readability."
+
+# -X mode: appended to user prompt to strongly suppress markdown/backtick wrapping.
+# Injecting into the user turn is more reliable than system prompt manipulation,
+# especially when the system prompt already contains formatting instructions.
+MODE_CODE_SUFFIX = (
+    "\n\nRespond with raw code only. No markdown, no triple backtick fences. "
+    "If you have important caveats or usage nuances, include them as code comments."
 )
 
 
@@ -109,7 +109,12 @@ def find_file_location(content: str) -> str:
     return f"[{best_file}]"
 
 
-def build_user_content(prompt: str, context_files: list, stdin_data: str | None) -> str:
+def build_user_content(
+    prompt: str,
+    context_files: list,
+    stdin_data: str | None,
+    mode_suffix: str = "",
+) -> str:
     parts = []
 
     for pattern in context_files:
@@ -125,9 +130,9 @@ def build_user_content(prompt: str, context_files: list, stdin_data: str | None)
         parts.append(f"---CONTEXT_TXT:{loc}---")
         parts.append(stdin_data)
         parts.append("---END---")
-        parts.append(prompt)
+        parts.append(prompt + mode_suffix)
     else:
-        parts.append(prompt)
+        parts.append(prompt + mode_suffix)
 
     return "\n".join(parts)
 
@@ -198,12 +203,13 @@ Options : -c [file_pattern|-] Add context from files (glob pattern) or stdin (-)
         print("aiv: api_key not set", file=sys.stderr)
         sys.exit(1)
 
+    # Mode suffixes are now injected into the user prompt rather than the system prompt
     if args.mode_chat:
-        effective_sys_prompt = (sys_prompt + "\n" + MODE_CHAT).strip()
+        mode_suffix = MODE_CHAT_SUFFIX
     elif args.mode_code:
-        effective_sys_prompt = (sys_prompt + "\n" + MODE_CODE).strip()
+        mode_suffix = MODE_CODE_SUFFIX
     else:
-        effective_sys_prompt = sys_prompt
+        mode_suffix = ""
 
     conversation_file = get_conversation_file()
 
@@ -224,8 +230,6 @@ Options : -c [file_pattern|-] Add context from files (glob pattern) or stdin (-)
                 stdin_data = raw
 
     convo = {"messages": []} if args.reset else load_conversation(conversation_file)
-    if sys_prompt:
-        convo["system"] = sys_prompt
 
     # Exit early if only context with no prompt
     if not prompt and has_stdin_context:
@@ -234,7 +238,7 @@ Options : -c [file_pattern|-] Add context from files (glob pattern) or stdin (-)
         save_conversation(convo, conversation_file)
         sys.exit(0)
 
-    content = build_user_content(prompt, args.context_files, stdin_data)
+    content = build_user_content(prompt, args.context_files, stdin_data, mode_suffix)
 
     if args.repeat_input:
         print(prompt)
@@ -248,7 +252,7 @@ Options : -c [file_pattern|-] Add context from files (glob pattern) or stdin (-)
         model=model,
         max_tokens=max_tokens,
         messages=convo["messages"],
-        **({"system": effective_sys_prompt} if effective_sys_prompt else {}),
+        **({"system": sys_prompt} if sys_prompt else {}),
     ) as stream:
         response_text = ""
         for text in stream.text_stream:

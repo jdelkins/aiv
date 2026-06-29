@@ -231,10 +231,11 @@ Options : -c [file_pattern|-] Add context from files (glob pattern) or stdin (-)
 
     convo = {"messages": []} if args.reset else load_conversation(conversation_file)
 
-    # Exit early if only context with no prompt
-    if not prompt and has_stdin_context:
-        content = build_user_content("", args.context_files, stdin_data)
-        convo["messages"].append({"role": "user", "content": content})
+    # Exit early if no prompt — stage context for future use if provided, then quit
+    if not prompt:
+        if args.context_files:
+            content = build_user_content("", args.context_files, stdin_data)
+            convo["messages"].append({"role": "user", "content": content})
         save_conversation(convo, conversation_file)
         sys.exit(0)
 

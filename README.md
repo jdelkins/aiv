@@ -87,7 +87,7 @@ aiv [options] [prompt]
 
 ### Options
 
-- `-c [pattern|-]`: Add context from files (glob pattern) or stdin (-)
+- `-c [pattern|-]`: Add context from files (filename or quoted glob pattern) or stdin (-)
 - `-r`: Repeat the input before output (useful for editor insertion)
 - `-R, --reset`: Reset conversation thread
 - `-C`: Conversational mode — appends formatting instructions to the user prompt

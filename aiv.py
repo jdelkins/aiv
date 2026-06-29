@@ -121,6 +121,8 @@ def build_user_content(
         if pattern == "-":
             continue
         for fpath in sorted(glob.glob(pattern, recursive=True)):
+            if not Path(fpath).is_file():
+                continue
             parts.append(f"---CONTEXT_FILE:[{fpath}]---")
             parts.append(Path(fpath).read_text(errors="replace"))
             parts.append("---END---")

@@ -114,16 +114,20 @@ def main():
         add_help=False,
     )
     parser.add_argument(
-        "-c", dest="context_files", action="append", default=[], metavar="file_pattern"
+        "--context",
+        "-c",
+        dest="context_files",
+        action="append",
+        default=[],
+        metavar="file_pattern",
     )
     parser.add_argument("--reset", "-R", dest="reset", action="store_true")
-    parser.add_argument("-r", dest="repeat_input", action="store_true")
-    parser.add_argument("-m", dest="model", default=None)
-    parser.add_argument("-s", dest="sys_prompt", default=None)
-    parser.add_argument("-C", dest="mode_chat", action="store_true")
-    parser.add_argument("-X", dest="mode_code", action="store_true")
-    parser.add_argument("-h", dest="help", action="store_true")
-    parser.add_argument("-v", dest="version", action="store_true")
+    parser.add_argument("--model", "-m", dest="model", default=None)
+    parser.add_argument("--sys-prompt", "-s", dest="sys_prompt", default=None)
+    parser.add_argument("--chat", "-C", dest="mode_chat", action="store_true")
+    parser.add_argument("--code", "-X", dest="mode_code", action="store_true")
+    parser.add_argument("--help", "-h", dest="help", action="store_true")
+    parser.add_argument("--version", "-v", dest="version", action="store_true")
     parser.add_argument("prompt", nargs="*")
     args = parser.parse_args()
 
@@ -131,15 +135,14 @@ def main():
         print(
             """aiv - AI Valve: Pipes for AI
 Usage   : aiv [options] [prompt]
-Options : -c [file_pattern|-] Add context from files (glob pattern) or stdin (-)
-          -r                  Repeat the input before output
-          -R, --reset         Reset conversation thread
-          -C                  Conversational mode (markdown enabled)
-          -X                  Code-only mode (no markdown, caveats as comments)
-          -m MODEL            Use specified model
-          -h                  Display this help message
-          -v                  Display version information
-          -s [prompt]         Overwrite system prompt""",
+Options : -c, --context [file_pattern|-]  Add context from files (glob pattern) or stdin (-)
+          -R, --reset                     Reset conversation thread
+          -C, --chat                      Conversational mode (markdown enabled)
+          -X, --code                      Code-only mode (no markdown, caveats as comments)
+          -h, --help                      Display this help message
+          -v, --version                   Display version information
+          -m, --model MODEL               Override Anthropic model
+          -s, --sys-prompt PROMPT         Override system prompt""",
             file=sys.stderr,
         )
         sys.exit(0)
@@ -208,9 +211,6 @@ Options : -c [file_pattern|-] Add context from files (glob pattern) or stdin (-)
         sys.exit(0)
 
     content = build_user_content(prompt, args.context_files, stdin_data, mode_suffix)
-
-    if args.repeat_input:
-        print(prompt)
 
     messages.append({"role": "user", "content": content})
     save_conversation(messages, conversation_file)

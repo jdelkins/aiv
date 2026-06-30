@@ -4,9 +4,13 @@
   glow,
 }:
 
+let
+  pyproject = lib.importTOML ./pyproject.toml;
+in
+
 python3Packages.buildPythonApplication {
   pname = "aiv";
-  version = "0.3.0";
+  version = pyproject.project.version;
   format = "pyproject";
 
   src = ./.;

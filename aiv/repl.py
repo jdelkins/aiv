@@ -57,21 +57,6 @@ def looks_like_markdown(text: str) -> bool:
     return False
 
 
-HELP_TEXT = """
-[bold cyan]aiv REPL commands[/bold cyan]
-
-  [cyan]!history[/cyan] \[range]               Show conversation history (optional range, e.g. 3-7)
-  [cyan]!show[/cyan] <num> \[role] \[--raw|-r]  Show full turn (role: user|assistant, default: both)
-  [cyan]!delete[/cyan] <range>                Delete interactions with preview + confirm
-  [cyan]!reset[/cyan]                         Wipe conversation (same as aiv -R), with confirm
-  [cyan]!context[/cyan] <path>                Add file to context (aiv -c <path>)
-  [cyan]!help[/cyan]                          Show this help
-  [cyan]!quit[/cyan], [cyan]!exit[/cyan]                   End the session
-
-  [dim]Ctrl-J submits a prompt (allows multiline input with Enter)[/dim]
-"""
-
-
 def cmd_history(args: str, conv_path: Path):
     messages = load_conversation(conv_path)
     interactions = build_interactions(messages)
@@ -265,7 +250,30 @@ def cmd_context(args: str):
 
 
 def cmd_help():
-    console.print(HELP_TEXT)
+    table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
+    table.add_column(style="cyan", no_wrap=True)
+    table.add_column(style="dim")
+
+    commands = [
+        ("!history \[range]", "Show conversation history (optional range, e.g. 3-7)"),
+        (
+            "!show <num> \[role] \[--raw|-r]",
+            "Show full turn (role: user|assistant, default: both)",
+        ),
+        ("!delete <range>", "Delete interactions with preview + confirm"),
+        ("!reset", "Wipe conversation (same as aiv -R), with confirm"),
+        ("!context <path>", "Add file to context (aiv -c <path>)"),
+        ("!help", "Show this help"),
+        ("!quit, !exit", "End the session"),
+    ]
+
+    console.print("\n[bold cyan]aiv REPL commands[/bold cyan]\n")
+    for cmd, desc in commands:
+        table.add_row(cmd, desc)
+    console.print(table)
+    console.print(
+        "\n  [dim]Ctrl-J submits a prompt (allows multiline input with Enter)[/dim]\n"
+    )
 
 
 def handle_command(text: str, conv_path: Path) -> bool:

@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 from anthropic.types import MessageParam
+from importlib.metadata import version as pkg_version, PackageNotFoundError
 
 from aiv.common import (
     get_conversation_file,
@@ -23,6 +24,13 @@ MODE_CODE_SUFFIX = (
     "\n\nRespond with raw code only. No markdown, no triple backtick fences. "
     "If you have important caveats or usage nuances, include them as code comments."
 )
+
+
+def get_version() -> str:
+    try:
+        return pkg_version("aiv")
+    except PackageNotFoundError:
+        return "unknown"
 
 
 def find_file_location(content: str) -> str:
@@ -114,7 +122,8 @@ def main():
     parser.add_argument("-s", dest="sys_prompt", default=None)
     parser.add_argument("-C", dest="mode_chat", action="store_true")
     parser.add_argument("-X", dest="mode_code", action="store_true")
-    parser.add_argument("-h", "-v", dest="help", action="store_true")
+    parser.add_argument("-h", dest="help", action="store_true")
+    parser.add_argument("-v", dest="version", action="store_true")
     parser.add_argument("prompt", nargs="*")
     args = parser.parse_args()
 
@@ -133,6 +142,10 @@ Options : -c [file_pattern|-] Add context from files (glob pattern) or stdin (-)
           -s [prompt]         Overwrite system prompt""",
             file=sys.stderr,
         )
+        sys.exit(0)
+
+    if args.version:
+        print(f"aiv {get_version()}", file=sys.stderr)
         sys.exit(0)
 
     if args.mode_chat and args.mode_code:

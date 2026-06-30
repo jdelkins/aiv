@@ -1,6 +1,7 @@
 import subprocess
 import sys
 import re
+import glob as _glob
 from pathlib import Path
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
@@ -252,14 +253,15 @@ def cmd_context(args: str):
     if not path:
         console.print("[red]Usage: !context <path>[/red]")
         return
-    if not Path(path).exists():
-        console.print(f"[red]File not found: {path}[/red]")
+    matches = _glob.glob(path, recursive=True)
+    if not matches:
+        console.print(f"[red]No files matched: {path}[/red]")
         return
     result = subprocess.run(["aiv", "-c", path], capture_output=True, text=True)
     if result.returncode != 0:
         console.print(f"[red]{result.stderr}[/red]")
     else:
-        console.print(f"[green]Added context: {path}[/green]")
+        console.print(f"[green]Added context: {path} ({len(matches)} file(s))[/green]")
 
 
 def cmd_help():

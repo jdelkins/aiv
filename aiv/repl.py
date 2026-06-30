@@ -30,7 +30,7 @@ kb = KeyBindings()
 console = Console()
 
 
-@kb.add("c-j")
+@kb.add("escape", "enter")
 def submit(event):
     text = event.app.current_buffer.text
     if text.strip():
@@ -278,7 +278,7 @@ def cmd_help():
         table.add_row(cmd, desc)
     console.print(table)
     console.print(
-        "\n  [dim]Ctrl-J submits a prompt (allows multiline input with Enter)[/dim]\n"
+        "\n  [dim]Alt-Enter (or Escape then Enter) submits a prompt (allows multiline input with Enter)[/dim]\n"
     )
 
 

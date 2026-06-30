@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aiv"
+version = "0.3.0"
+description = "AI Valve: Pipes for AI"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic",
+    "prompt-toolkit",
+    "rich",
+]
+
+[project.scripts]
+aiv = "aiv.cli:main"
+aiv-repl = "aiv.repl:run"

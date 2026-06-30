@@ -3,71 +3,26 @@
 import anthropic
 import argparse
 import glob
-import json
 import subprocess
 import sys
 from pathlib import Path
+from anthropic.types import MessageParam
 
-CONFIG_DIR = Path.home() / ".config" / "aiv"
-CONFIG_FILE = CONFIG_DIR / "config"
-FALLBACK_CONVERSATION_FILE = CONFIG_DIR / "conversation.json"
-LOCAL_CONVERSATION_FILE = Path(".aiv-conversation.json")
+from aiv.common import (
+    get_conversation_file,
+    load_config,
+    load_conversation,
+    save_conversation,
+)
 
 # -C mode: appended to user prompt to nudge toward markdown formatting
 MODE_CHAT_SUFFIX = "\n\nRespond using markdown formatting including triple backticks where it aids readability."
 
 # -X mode: appended to user prompt to strongly suppress markdown/backtick wrapping.
-# Injecting into the user turn is more reliable than system prompt manipulation,
-# especially when the system prompt already contains formatting instructions.
 MODE_CODE_SUFFIX = (
     "\n\nRespond with raw code only. No markdown, no triple backtick fences. "
     "If you have important caveats or usage nuances, include them as code comments."
 )
-
-
-def find_repo_root() -> Path | None:
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            return Path(result.stdout.strip())
-    except Exception:
-        pass
-    return None
-
-
-def get_conversation_file() -> Path:
-    repo_root = find_repo_root()
-    if repo_root is not None:
-        return repo_root / ".aiv-conversation.json"
-    return FALLBACK_CONVERSATION_FILE
-
-
-def load_config():
-    config = {}
-    if not CONFIG_FILE.exists():
-        print("aiv: config file not found", file=sys.stderr)
-        sys.exit(1)
-    with open(CONFIG_FILE) as f:
-        for line in f:
-            line = line.split("#")[0].strip()
-            if "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key = key.strip().lower()
-            value = value.strip().strip('"')
-            if key == "api_key":
-                config["api_key"] = value
-            elif key == "model":
-                config["model"] = value
-            elif key == "max_tokens":
-                config["max_tokens"] = value
-            elif key in ("sys_prompt", "system_prompt"):
-                config["sys_prompt"] = value
-    return config
 
 
 def find_file_location(content: str) -> str:
@@ -109,6 +64,11 @@ def find_file_location(content: str) -> str:
     return f"[{best_file}]"
 
 
+# find_file_location references find_repo_root but doesn't import it above —
+# importing here to keep it local to cli.py as agreed
+from aiv.common import find_repo_root
+
+
 def build_user_content(
     prompt: str,
     context_files: list,
@@ -137,19 +97,6 @@ def build_user_content(
         parts.append(prompt + mode_suffix)
 
     return "\n".join(parts)
-
-
-def load_conversation(conversation_file: Path) -> dict:
-    if conversation_file.exists():
-        try:
-            return json.loads(conversation_file.read_text())
-        except json.JSONDecodeError:
-            pass
-    return {"messages": []}
-
-
-def save_conversation(data: dict, conversation_file: Path):
-    conversation_file.write_text(json.dumps(data, indent=2))
 
 
 def main():
@@ -192,7 +139,12 @@ Options : -c [file_pattern|-] Add context from files (glob pattern) or stdin (-)
         print("aiv: -C and -X are mutually exclusive", file=sys.stderr)
         sys.exit(1)
 
-    config = load_config()
+    try:
+        config = load_config()
+    except FileNotFoundError as e:
+        print(e, file=sys.stderr)
+        sys.exit(1)
+
     api_key = config.get("api_key", "")
     model = args.model or config.get("model", "claude-3-7-sonnet-latest")
     sys_prompt = args.sys_prompt or config.get("sys_prompt", "")
@@ -205,7 +157,6 @@ Options : -c [file_pattern|-] Add context from files (glob pattern) or stdin (-)
         print("aiv: api_key not set", file=sys.stderr)
         sys.exit(1)
 
-    # Mode suffixes are now injected into the user prompt rather than the system prompt
     if args.mode_chat:
         mode_suffix = MODE_CHAT_SUFFIX
     elif args.mode_code:
@@ -231,14 +182,16 @@ Options : -c [file_pattern|-] Add context from files (glob pattern) or stdin (-)
             else:
                 stdin_data = raw
 
-    convo = {"messages": []} if args.reset else load_conversation(conversation_file)
+    messages: list[MessageParam] = (
+        [] if args.reset else load_conversation(conversation_file)
+    )
 
     # Exit early if no prompt — stage context for future use if provided, then quit
     if not prompt:
         if args.context_files:
             content = build_user_content("", args.context_files, stdin_data)
-            convo["messages"].append({"role": "user", "content": content})
-        save_conversation(convo, conversation_file)
+            messages.append({"role": "user", "content": content})
+        save_conversation(messages, conversation_file)
         sys.exit(0)
 
     content = build_user_content(prompt, args.context_files, stdin_data, mode_suffix)
@@ -246,15 +199,15 @@ Options : -c [file_pattern|-] Add context from files (glob pattern) or stdin (-)
     if args.repeat_input:
         print(prompt)
 
-    convo["messages"].append({"role": "user", "content": content})
-    save_conversation(convo, conversation_file)
+    messages.append({"role": "user", "content": content})
+    save_conversation(messages, conversation_file)
 
     client = anthropic.Anthropic(api_key=api_key)
 
     with client.messages.stream(
         model=model,
         max_tokens=max_tokens,
-        messages=convo["messages"],
+        messages=messages,
         **({"system": sys_prompt} if sys_prompt else {}),
     ) as stream:
         response_text = ""
@@ -263,8 +216,8 @@ Options : -c [file_pattern|-] Add context from files (glob pattern) or stdin (-)
             response_text += text
         print()
 
-    convo["messages"].append({"role": "assistant", "content": response_text})
-    save_conversation(convo, conversation_file)
+    messages.append({"role": "assistant", "content": response_text})
+    save_conversation(messages, conversation_file)
 
 
 if __name__ == "__main__":

@@ -22,9 +22,12 @@
 
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
+            glow
             (python3.withPackages (
               ps: with ps; [
                 anthropic
+                prompt-toolkit
+                rich
               ]
             ))
           ];

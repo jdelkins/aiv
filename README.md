@@ -9,6 +9,7 @@ location detection.
 
 - **Editor-optimized design** for seamless integration with Helix and other editors
 - **Terminal-friendly interface** for command-line workflows and automation
+- **Interactive REPL** (`aiv-repl`) for conversational sessions with history management
 - **Smart context detection** that automatically identifies source files and line locations
 - **Per-project conversation state** scoped to the current git repository
 - **Pipe-friendly interface** that works with any Unix tool
@@ -43,12 +44,14 @@ nix profile install github:jdelkins/aiv
 
 2. Install dependencies:
    ```bash
-   pip install anthropic
+   pip install anthropic prompt-toolkit rich
    ```
+   You will also need [glow](https://github.com/charmbracelet/glow) on your PATH
+   for `aiv-repl` to render markdown responses.
 
-3. Make the script executable:
+3. Install the package:
    ```bash
-   chmod +x aiv.py
+   pip install -e .
    ```
 
 ## Configuration
@@ -79,13 +82,15 @@ nix profile install github:jdelkins/aiv
    prompt sets a sensible default, and the mode flags override formatting behaviour
    only for the turn they are applied to, without permanently altering the session.
 
-## Usage
+## Tools
+
+### `aiv` — pipe-oriented CLI
 
 ```
 aiv [options] [prompt]
 ```
 
-### Options
+#### Options
 
 - `-c [pattern|-]`: Add context from files (filename or quoted glob pattern) or stdin (-)
 - `-r`: Repeat the input before output (useful for editor insertion)
@@ -100,6 +105,27 @@ aiv [options] [prompt]
 - `-h, -v`: Display help/version information
 
 Note: `-C` and `-X` are mutually exclusive.
+
+### `aiv-repl` — interactive REPL
+
+`aiv-repl` provides an interactive session for conversational use. It renders
+responses via `glow` for rich markdown display and shares the same conversation
+file as `aiv`, so context built up in one tool is immediately available in the other.
+
+Prompts are submitted with **Ctrl-J**, allowing Enter to be used freely for
+multiline input.
+
+#### REPL commands
+
+| Command | Description |
+|---|---|
+| `!history [range]` | Show conversation history (e.g. `!history 3-7`) |
+| `!show <num> [role] [--raw\|-r]` | Show full content of an interaction |
+| `!delete <range>` | Delete interactions with preview and confirmation |
+| `!reset` | Wipe the entire conversation with confirmation |
+| `!context <path>` | Add a file to context (equivalent to `aiv -c <path>`) |
+| `!help` | Show available commands |
+| `!quit` / `!exit` | End the session |
 
 ## Examples
 
@@ -116,6 +142,9 @@ aiv "Explain what this regex does: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{
 
 # Conversational mode with markdown formatting
 aiv -C "Walk me through the tradeoffs of different caching strategies"
+
+# Interactive REPL session
+aiv-repl
 ```
 
 ### Working with Files
@@ -256,6 +285,9 @@ AIV scopes conversation history to the current git repository:
 - Outside any git repo, state falls back to `~/.config/aiv/conversation.json`
 - Conversation is preserved across invocations by default
 - Use `-R` or `--reset` to start a fresh conversation
+
+Both `aiv` and `aiv-repl` read and write the same conversation file, so you can
+freely switch between pipeline use and interactive use within the same session.
 
 It is recommended to add `.aiv-conversation.json` to your global gitignore:
 ```bash

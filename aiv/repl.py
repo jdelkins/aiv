@@ -6,6 +6,7 @@ from pathlib import Path
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.history import FileHistory
 from rich.console import Console
 from rich.table import Table
 from anthropic.types import MessageParam
@@ -21,6 +22,8 @@ from aiv.common import (
     first_line,
     format_bytes,
     parse_range,
+    find_repo_root,
+    CONFIG_DIR,
 )
 
 kb = KeyBindings()
@@ -29,7 +32,10 @@ console = Console()
 
 @kb.add("c-j")
 def submit(event):
-    event.app.exit(result=event.app.current_buffer.text)
+    text = event.app.current_buffer.text
+    if text.strip():
+        event.app.current_buffer.history.append_string(text)
+    event.app.exit(result=text)
 
 
 class QuitRepl(Exception):
@@ -315,7 +321,10 @@ def handle_command(text: str, conv_path: Path) -> bool:
 
 def run():
     cmd_help()
-    session = PromptSession()
+    # History file lives at repo root if available, else falls back to CONFIG_DIR
+    repo_root = find_repo_root()
+    history_file = (repo_root if repo_root is not None else CONFIG_DIR) / ".aiv-history"
+    session = PromptSession(history=FileHistory(str(history_file)))
     while True:
         conv_path = get_conversation_file()
 

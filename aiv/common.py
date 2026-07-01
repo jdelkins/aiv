@@ -2,10 +2,18 @@ from anthropic.types import MessageParam
 import json
 import subprocess
 from pathlib import Path
+from importlib.metadata import version as pkg_version, PackageNotFoundError
 
 CONFIG_DIR = Path.home() / ".config" / "aiv"
 CONFIG_FILE = CONFIG_DIR / "config"
 FALLBACK_CONVERSATION_FILE = CONFIG_DIR / "conversation.json"
+
+
+def get_version() -> str:
+    try:
+        return pkg_version("aiv")
+    except PackageNotFoundError:
+        return "unknown"
 
 
 def find_repo_root() -> Path | None:
@@ -64,6 +72,10 @@ def load_conversation(path: Path) -> list[MessageParam]:
 
 def save_conversation(messages: list[MessageParam], path: Path):
     path.write_text(json.dumps({"messages": messages}, indent=2))
+
+
+def reset_conversation(path: Path):
+    save_conversation([], path)
 
 
 def build_interactions(messages: list[MessageParam]) -> list[list[MessageParam]]:

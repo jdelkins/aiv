@@ -7,9 +7,9 @@ import subprocess
 import sys
 from pathlib import Path
 from anthropic.types import MessageParam
-from importlib.metadata import version as pkg_version, PackageNotFoundError
 
 from aiv.common import (
+    get_version,
     get_conversation_file,
     load_config,
     load_conversation,
@@ -24,13 +24,6 @@ MODE_CODE_SUFFIX = (
     "\n\nRespond with raw code only. No markdown, no triple backtick fences. "
     "If you have important caveats or usage nuances, include them as code comments."
 )
-
-
-def get_version() -> str:
-    try:
-        return pkg_version("aiv")
-    except PackageNotFoundError:
-        return "unknown"
 
 
 def find_file_location(content: str) -> str:

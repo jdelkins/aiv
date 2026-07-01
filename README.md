@@ -9,7 +9,7 @@ location detection.
 
 - **Editor-optimized design** for seamless integration with Helix and other editors
 - **Terminal-friendly interface** for command-line workflows and automation
-- **Interactive REPL** (`aiv-repl`) for conversational sessions with history management
+- **Interactive REPL** (`aiv-repl` or `aiv -i`) for conversational sessions with history management
 - **Smart context detection** that automatically identifies source files and line locations
 - **Per-project conversation state** scoped to the current git repository
 - **Pipe-friendly interface** that works with any Unix tool
@@ -47,7 +47,7 @@ nix profile install github:jdelkins/aiv
    pip install anthropic prompt-toolkit rich
    ```
    You will also need [glow](https://github.com/charmbracelet/glow) on your PATH
-   for `aiv-repl` to render markdown responses.
+   for the REPL to render markdown responses.
 
 3. Install the package:
    ```bash
@@ -93,27 +93,31 @@ aiv [options] [prompt]
 #### Options
 
 - `-c [pattern|-]`: Add context from files (filename or quoted glob pattern) or stdin (-)
-- `-r`: Repeat the input before output (useful for editor insertion)
 - `-R, --reset`: Reset conversation thread
 - `-C`: Conversational mode — appends formatting instructions to the user prompt
   that encourage markdown output with triple backticks where appropriate
 - `-X`: Code-only mode — appends formatting instructions to the user prompt that
   suppress markdown and triple backtick fences; caveats are emitted as code comments.
   Recommended when piping output back into an editor or shell pipeline.
+- `-i, --repl`: Launch the interactive REPL. If a prompt or context files are
+  also supplied, they are processed as the first turn inside the REPL (with output
+  rendered through `glow`) before the interactive prompt appears.
 - `-m MODEL`: Use specified model
 - `-s [prompt]`: Override system prompt
 - `-h, -v`: Display help/version information
 
-Note: `-C` and `-X` are mutually exclusive.
+Note: `-C` and `-X` are mutually exclusive. When `-i` is used without either,
+`-C` is implied.
 
 ### `aiv-repl` — interactive REPL
 
-`aiv-repl` provides an interactive session for conversational use. It renders
-responses via `glow` for rich markdown display and shares the same conversation
-file as `aiv`, so context built up in one tool is immediately available in the other.
+`aiv-repl` provides an interactive session for conversational use. It is
+equivalent to `aiv -i` with no initial prompt. It renders responses via `glow`
+for rich markdown display and shares the same conversation file as `aiv`, so
+context built up in one tool is immediately available in the other.
 
-Prompts are submitted with **Ctrl-J**, allowing Enter to be used freely for
-multiline input.
+Prompts are submitted with **Alt-Enter** (or Escape then Enter), allowing Enter
+to be used freely for multiline input.
 
 #### REPL commands
 
@@ -144,6 +148,8 @@ aiv "Explain what this regex does: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{
 aiv -C "Walk me through the tradeoffs of different caching strategies"
 
 # Interactive REPL session
+aiv -i
+# or equivalently:
 aiv-repl
 ```
 
@@ -157,6 +163,9 @@ aiv -c "src/*.js" "Find potential security issues in these files"
 
 # Compare implementations
 aiv -c old_version.py -c new_version.py "What are the key differences?"
+
+# Load context and launch REPL in one step
+aiv -i -c main.py "Walk me through this file"
 ```
 
 ### Pipeline Integration
@@ -230,7 +239,7 @@ aiv -c -
 ### 2. Generate Code After Selection (`|`)
 After adding context, generate new content that gets inserted after your selection:
 ```bash
-aiv -X -r "generate unit tests for this function"
+aiv -X "generate unit tests for this function"
 ```
 
 ### 3. Replace Selection with AI Response (`|`)
@@ -260,6 +269,9 @@ instruction to the user prompt for that specific request. This means:
 Use `-C` for interactive, readable responses during exploration or discussion.
 Use `-X` whenever output will be piped into an editor, written to a file, or
 consumed by another tool.
+
+When using `-i` (REPL mode), the chosen mode flag applies to every turn in the
+session. If neither `-C` nor `-X` is given, `-C` is the default for REPL sessions.
 
 ### Smart Location Detection
 
@@ -298,6 +310,7 @@ echo ".aiv-conversation.json" >> ~/.gitignore_global
 
 - **Conversation history (in repo)**: `.aiv-conversation.json` at repo root
 - **Conversation history (fallback)**: `~/.config/aiv/conversation.json`
+- **REPL input history**: `.aiv-history` at repo root (or `~/.config/aiv/.aiv-history`)
 - **Configuration**: `~/.config/aiv/config`
 
 ## Differences from Shell Version
@@ -317,12 +330,13 @@ echo ".aiv-conversation.json" >> ~/.gitignore_global
   rather than shelling out to `curl`.
 - **Streaming**: Responses are streamed to stdout in real time as before, but
   via the SDK's streaming interface rather than raw HTTP chunked transfer.
-- **`-r` flag behaviour**: The shell version attempted to extract and repeat
-  only the stdin portion of the input. The Python version repeats the prompt
-  argument only.
+- **`-r` flag removed**: The shell version attempted to repeat the stdin portion
+  of the input. This flag is not present in the Python version.
 - **Output mode flags**: `-C` and `-X` are new. They inject per-request
   formatting instructions into the user prompt rather than altering the system
   prompt, keeping behaviour predictable and the system prompt stable.
+- **Integrated REPL**: `aiv -i` launches an interactive session directly, optionally
+  with an initial prompt and context files that are processed as the first REPL turn.
 
 ## License
 

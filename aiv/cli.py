@@ -14,6 +14,8 @@ from aiv.common import (
     load_config,
     load_conversation,
     save_conversation,
+    reset_conversation,
+    find_repo_root,
 )
 
 # -C mode: appended to user prompt to nudge toward markdown formatting
@@ -65,11 +67,6 @@ def find_file_location(content: str) -> str:
     return f"[{best_file}]"
 
 
-# find_file_location references find_repo_root but doesn't import it above —
-# importing here to keep it local to cli.py as agreed
-from aiv.common import find_repo_root
-
-
 def build_user_content(
     prompt: str,
     context_files: list,
@@ -119,6 +116,7 @@ def main():
     parser.add_argument("--sys-prompt", "-s", dest="sys_prompt", default=None)
     parser.add_argument("--chat", "-C", dest="mode_chat", action="store_true")
     parser.add_argument("--code", "-X", dest="mode_code", action="store_true")
+    parser.add_argument("--repl", "-i", dest="repl", action="store_true")
     parser.add_argument("--help", "-h", dest="help", action="store_true")
     parser.add_argument("--version", "-v", dest="version", action="store_true")
     parser.add_argument("prompt", nargs="*")
@@ -132,6 +130,7 @@ Options : -c, --context [file_pattern|-]  Add context from files (glob pattern) 
           -R, --reset                     Reset conversation thread
           -C, --chat                      Conversational mode (markdown enabled)
           -X, --code                      Code-only mode (no markdown, caveats as comments)
+          -i, --repl                      After processing, launch interactive REPL
           -h, --help                      Display this help message
           -v, --version                   Display version information
           -m, --model MODEL               Override Anthropic model
@@ -166,12 +165,19 @@ Options : -c, --context [file_pattern|-]  Add context from files (glob pattern) 
         print("aiv: api_key not set", file=sys.stderr)
         sys.exit(1)
 
-    if args.mode_chat:
+    # When --repl is given and no explicit mode flag, default to chat mode
+    if args.repl and not args.mode_chat and not args.mode_code:
         mode_suffix = MODE_CHAT_SUFFIX
+        repl_mode_code = False
+    elif args.mode_chat:
+        mode_suffix = MODE_CHAT_SUFFIX
+        repl_mode_code = False
     elif args.mode_code:
         mode_suffix = MODE_CODE_SUFFIX
+        repl_mode_code = True
     else:
         mode_suffix = ""
+        repl_mode_code = False
 
     conversation_file = get_conversation_file()
 
@@ -191,11 +197,33 @@ Options : -c, --context [file_pattern|-]  Add context from files (glob pattern) 
             else:
                 stdin_data = raw
 
+    # When --repl is set, hand everything off to the REPL immediately so the
+    # initial prompt (if any) is processed through the same glow pipeline as
+    # subsequent turns, and the help banner appears before any response.
+    if args.repl:
+        # Apply reset here before handing off; REPL receives reset=False so it
+        # doesn't wipe the conversation a second time after we've already loaded it.
+        if args.reset:
+            reset_conversation(conversation_file)
+        from aiv.repl import run as repl_run
+
+        repl_run(
+            model=args.model,
+            sys_prompt=args.sys_prompt,
+            mode_code=repl_mode_code,
+            reset=False,
+            initial_prompt=prompt if prompt else None,
+            initial_context_files=args.context_files if args.context_files else None,
+            initial_stdin_data=stdin_data,
+        )
+        sys.exit(0)
+
+    # --- Non-repl path below ---
+
     messages: list[MessageParam] = (
         [] if args.reset else load_conversation(conversation_file)
     )
 
-    # Exit early if no prompt — stage context for future use if provided, then quit
     if not prompt:
         if args.context_files:
             content = build_user_content("", args.context_files, stdin_data)

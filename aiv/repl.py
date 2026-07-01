@@ -13,6 +13,7 @@ from prompt_toolkit.history import FileHistory
 from rich.console import Console
 from rich.table import Table
 from anthropic.types import MessageParam
+from importlib.metadata import version as pkg_version, PackageNotFoundError
 
 from aiv.common import (
     get_version,
@@ -101,8 +102,6 @@ def print_history_table(interactions: list[list[MessageParam]], start: int, end:
         for msg in interaction:
             role = msg["role"]
             content = msg["content"]
-            # content may be a list of blocks in the Anthropic API but in practice
-            # aiv always writes plain strings; cast for local use
             content_str = content if isinstance(content, str) else str(content)
             total_bytes = len(content_str.encode())
             block_count = count_context_blocks(content_str)
@@ -325,55 +324,94 @@ def handle_command(text: str, conv_path: Path) -> bool:
     return True
 
 
-def run():
-    parser = argparse.ArgumentParser(
-        prog="aiv-repl",
-        description="aiv interactive REPL",
-        add_help=False,
+def _dispatch_prompt(
+    prompt_text: str,
+    mode_flag: str,
+    extra_args: list[str],
+    context_files: list[str] | None = None,
+    stdin_data: str | None = None,
+    mode_code: bool = False,
+):
+    """
+    Build and run an aiv subprocess for a single prompt turn, piping output
+    through glow (unless in -X / code mode). Returns the subprocess returncode.
+    """
+    cmd = ["aiv", mode_flag, *extra_args]
+    for cf in context_files or []:
+        cmd += ["-c", cf]
+    cmd.append(prompt_text)
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        # stdin_data support: pass as stdin only when present; aiv treats raw
+        # stdin (without -c -) as the prompt if no positional prompt is given,
+        # but here we always supply a positional prompt, so it becomes context.
+        input=stdin_data,
     )
-    parser.add_argument("--model", "-m", dest="model", default=None)
-    parser.add_argument("--sys-prompt", "-s", dest="sys_prompt", default=None)
-    parser.add_argument("--reset", "-R", dest="reset", action="store_true")
-    parser.add_argument("--code", "-X", dest="mode_code", action="store_true")
-    parser.add_argument("--help", "-h", dest="help", action="store_true")
-    parser.add_argument("--version", "-v", dest="version", action="store_true")
-    args = parser.parse_args()
+    if result.returncode != 0:
+        print(result.stderr, file=sys.stderr)
+        return result.returncode
 
-    if args.help:
-        print(
-            """aiv-repl - aiv interactive REPL
-Usage   : aiv-repl [options]
-Options : -R, --reset       Wipe conversation on startup
-          -X, --code        Code-only mode (no markdown, caveats as comments)
-          -m, --model MODEL Override Anthropic model for this session
-          -s, --sys-prompt  Override system prompt for this session
-          -h, --help        Display this help message
-          -v, --version     Display version information""",
-            file=sys.stderr,
-        )
-        sys.exit(0)
+    if mode_code:
+        print(result.stdout)
+    else:
+        subprocess.run(["glow", "-"], input=result.stdout, text=True)
 
-    if args.version:
-        print(f"aiv-repl {get_version()}", file=sys.stderr)
-        sys.exit(0)
+    return result.returncode
 
-    # Build extra args to pass through to each aiv subprocess call
-    extra_args: list[str] = []
-    if args.model:
-        extra_args += ["-m", args.model]
-    if args.sys_prompt:
-        extra_args += ["-s", args.sys_prompt]
 
-    mode_flag = "-X" if args.mode_code else "-C"
+def run(
+    model: str | None = None,
+    sys_prompt: str | None = None,
+    mode_code: bool = False,
+    reset: bool = False,
+    initial_prompt: str | None = None,
+    initial_context_files: list[str] | None = None,
+    initial_stdin_data: str | None = None,
+):
+    """
+    Main REPL loop. Can be called directly from cli.py (aiv --repl) with session
+    parameters already resolved, or via run_cli() when invoked as aiv-repl.
 
-    if args.reset:
+    When initial_prompt or initial_context_files are provided (i.e. the user ran
+    `aiv -i -c file.txt "some prompt"`), the first turn is synthesised and
+    dispatched through the normal glow pipeline before the interactive loop begins,
+    so the experience is seamless from the start.
+    """
+    if reset:
         reset_conversation(get_conversation_file())
 
+    extra_args: list[str] = []
+    if model:
+        extra_args += ["-m", model]
+    if sys_prompt:
+        extra_args += ["-s", sys_prompt]
+
+    mode_flag = "-X" if mode_code else "-C"
+
+    # Show the help/welcome banner first, before any API call
     cmd_help()
-    # History file lives at repo root if available, else falls back to CONFIG_DIR
+
     repo_root = find_repo_root()
     history_file = (repo_root if repo_root is not None else CONFIG_DIR) / ".aiv-history"
     session = PromptSession(history=FileHistory(str(history_file)))
+
+    # Process the initial prompt (if supplied on the CLI) before entering the loop
+    if initial_prompt or initial_context_files:
+        display = initial_prompt or ""
+        if display:
+            # Mirror what the prompt line would look like so the user sees it
+            console.print(f"[bold cyan]aiv>[/bold cyan] {display}\n")
+        _dispatch_prompt(
+            prompt_text=initial_prompt or "",
+            mode_flag=mode_flag,
+            extra_args=extra_args,
+            context_files=initial_context_files,
+            stdin_data=initial_stdin_data,
+            mode_code=mode_code,
+        )
 
     while True:
         conv_path = get_conversation_file()
@@ -398,16 +436,57 @@ Options : -R, --reset       Wipe conversation on startup
         except QuitRepl:
             break
 
-        result = subprocess.run(
-            ["aiv", mode_flag, *extra_args, text],
-            capture_output=True,
-            text=True,
+        _dispatch_prompt(
+            prompt_text=text,
+            mode_flag=mode_flag,
+            extra_args=extra_args,
+            mode_code=mode_code,
         )
-        if result.returncode != 0:
-            print(result.stderr, file=sys.stderr)
-            continue
-        subprocess.run(["glow", "-"], input=result.stdout, text=True)
+
+
+def run_cli():
+    """
+    Entry point for the aiv-repl console script. Parses its own args then
+    delegates to run().
+    """
+    parser = argparse.ArgumentParser(
+        prog="aiv-repl",
+        description="aiv interactive REPL",
+        add_help=False,
+    )
+    parser.add_argument("--model", "-m", dest="model", default=None)
+    parser.add_argument("--sys-prompt", "-s", dest="sys_prompt", default=None)
+    parser.add_argument("--reset", "-R", dest="reset", action="store_true")
+    parser.add_argument("--code", "-X", dest="mode_code", action="store_true")
+    parser.add_argument("--help", "-h", dest="help", action="store_true")
+    parser.add_argument("--version", "-v", dest="version", action="store_true")
+    args = parser.parse_args()
+
+    if args.help:
+        print(
+            """aiv-repl - aiv interactive REPL
+Usage   : aiv-repl [options]
+Options : -R, --reset            Wipe conversation on startup
+          -X, --code             Code-only mode (no markdown, caveats as comments)
+          -m, --model MODEL      Override Anthropic model for this session
+          -s, --sys-prompt TEXT  Override system prompt for this session
+          -h, --help             Display this help message
+          -v, --version          Display version information""",
+            file=sys.stderr,
+        )
+        sys.exit(0)
+
+    if args.version:
+        print(f"aiv-repl {get_version()}", file=sys.stderr)
+        sys.exit(0)
+
+    run(
+        model=args.model,
+        sys_prompt=args.sys_prompt,
+        mode_code=args.mode_code,
+        reset=args.reset,
+    )
 
 
 if __name__ == "__main__":
-    run()
+    run_cli()

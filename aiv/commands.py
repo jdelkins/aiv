@@ -110,9 +110,8 @@ class PipelineContext:
     stdin_data: str | None = None
     api_key: str = ""
     max_tokens: int = 4096
-    interactive: bool = (
-        False  # set True by run_repl_loop; controls confirmation prompts
-    )
+    interactive: bool = False  # set True by run_repl_loop
+    piped_stdin: bool = False  # True if stdin was a pipe at invocation
 
     @property
     def mode_suffix(self) -> str:
@@ -287,10 +286,12 @@ def cmd_delete(cmd: DeleteCommand, ctx: PipelineContext):
                 "starting with an assistant turn, which is invalid for the Anthropic API."
             )
 
-    # !delete is only reachable interactively (from the REPL), so always confirm.
-    # If somehow called non-interactively, ctx.interactive will be False and we
-    # skip the confirmation — same logic as cmd_reset.
-    if not ctx.interactive:
+    # Same confirmation logic as cmd_reset: confirm if interactive (REPL) or if
+    # nothing was piped into this invocation. Skip confirmation only when stdin
+    # was explicitly piped (a scripted, non-interactive invocation).
+    should_confirm = ctx.interactive or not ctx.piped_stdin
+
+    if not should_confirm:
         new_interactions = interactions[: start - 1] + interactions[end:]
         save_conversation(flatten_interactions(new_interactions), conv_path)
         return
@@ -323,7 +324,7 @@ def cmd_reset(ctx: PipelineContext):
     interactions = build_interactions(messages)
     # Confirm if interactive (inside REPL) or if no stdin was piped (direct terminal invocation).
     # Skip confirmation if stdin was piped — the user clearly scripted this.
-    should_confirm = ctx.interactive or ctx.stdin_data is None
+    should_confirm = ctx.interactive or not ctx.piped_stdin
 
     if not interactions:
         # Only print this if someone will see it

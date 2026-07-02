@@ -117,6 +117,7 @@ Options : -c, --context [file_pattern|-]  Add context from files (glob pattern) 
         max_tokens=int(max_tokens_raw),
         stdin_data=stdin_data,
         # interactive stays False here; run_repl_loop sets it True if -i is used
+        piped_stdin=not stdin_is_tty,
     )
 
     commands: list[Command] = commands_from_args(args)

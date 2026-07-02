@@ -211,7 +211,7 @@ def cmd_history(cmd: HistoryCommand):
 def cmd_show(cmd: ShowCommand, ctx: PipelineContext):
     parts = cmd.args.strip().split()
     if not parts:
-        console.print("[red]Usage: !show <num> [user|assistant] [--raw|-r][/red]")
+        console.print("[red]Usage: !show <num|range> [user|assistant] [--raw|-r][/red]")
         return
 
     raw_mode = False
@@ -227,38 +227,34 @@ def cmd_show(cmd: ShowCommand, ctx: PipelineContext):
     messages = load_conversation(conv_path)
     interactions = build_interactions(messages)
 
-    try:
-        num = int(parts[0])
-    except ValueError:
-        console.print(f"[red]Invalid interaction number: {parts[0]}[/red]")
+    range_tuple = parse_range(parts[0], len(interactions))
+    if range_tuple is None:
+        console.print(f"[red]Invalid number or range: {parts[0]}[/red]")
         return
-
-    if num < 1 or num > len(interactions):
-        console.print(
-            f"[red]Interaction {num} out of range (1-{len(interactions)})[/red]"
-        )
-        return
+    start, end = range_tuple
 
     role_filter = parts[1].lower() if len(parts) > 1 else None
     if role_filter and role_filter not in ("user", "assistant"):
         console.print("[red]Role must be 'user' or 'assistant'[/red]")
         return
 
-    interaction = interactions[num - 1]
-    for msg in interaction:
-        if role_filter and msg["role"] != role_filter:
-            continue
-        content = msg["content"]
-        content_str = content if isinstance(content, str) else str(content)
-        role = msg["role"]
-        role_style = "green" if role == "user" else "magenta"
-        console.print(
-            f"\n[bold {role_style}]--- {role} (interaction {num}) ---[/bold {role_style}]"
-        )
-        if raw_mode:
-            print(content_str)
-        else:
-            render_output(content_str, ctx)
+    for i in range(start - 1, end):
+        interaction = interactions[i]
+        num = i + 1
+        for msg in interaction:
+            if role_filter and msg["role"] != role_filter:
+                continue
+            content = msg["content"]
+            content_str = content if isinstance(content, str) else str(content)
+            role = msg["role"]
+            role_style = "green" if role == "user" else "magenta"
+            console.print(
+                f"\n[bold {role_style}]--- {role} (interaction {num}) ---[/bold {role_style}]"
+            )
+            if raw_mode:
+                print(content_str)
+            else:
+                render_output(content_str, ctx)
 
 
 def cmd_delete(cmd: DeleteCommand, ctx: PipelineContext):
@@ -407,7 +403,7 @@ def cmd_help():
     commands = [
         ("!history \[range]", "Show conversation history (optional range, e.g. 3-7)"),
         (
-            "!show <num> \[role] \[--raw|-r]",
+            "!show <range> \[role] \[--raw|-r]",
             "Show full turn (role: user|assistant, default: both)",
         ),
         ("!delete <range>", "Delete interactions with preview + confirm"),
@@ -478,7 +474,8 @@ def commands_from_args(args) -> list[Command]:
       2. ContextCommand per -c value
       3. PromptCommand (if prompt given)
       4. HistoryCommand (if --history)
-      5. ReplCommand (if -i), otherwise pipeline ends naturally
+      5. ShowCommand (if --show)
+      6. ReplCommand (if -i), otherwise pipeline ends naturally
     """
     commands: list[Command] = []
 
@@ -496,6 +493,11 @@ def commands_from_args(args) -> list[Command]:
     if history_val is not None:
         range_str = None if history_val is True else str(history_val)
         commands.append(HistoryCommand(range=range_str))
+
+    show_val = getattr(args, "show", None)
+    if show_val is not None:
+        range_str = "1-" if show_val is True else str(show_val)
+        commands.append(ShowCommand(args=range_str))
 
     if getattr(args, "repl", False):
         commands.append(ReplCommand())

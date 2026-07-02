@@ -35,6 +35,15 @@ def main():
     parser.add_argument(
         "--history", "-H", dest="history", nargs="?", const=True, default=None
     )
+    parser.add_argument(
+        "--show",
+        "-S",
+        dest="show",
+        nargs="?",
+        const=True,
+        default=None,
+        metavar="range",
+    )
     parser.add_argument("--help", "-h", dest="help", action="store_true")
     parser.add_argument("--version", "-v", dest="version", action="store_true")
     parser.add_argument("prompt", nargs="*")
@@ -50,6 +59,7 @@ Options : -c, --context [file_pattern|-]  Add context from files (glob pattern) 
           -X, --code                      Code-only mode (no markdown, caveats as comments)
           -i, --repl                      Enter interactive REPL (after processing any prompt)
           -H, --history [range]           Show conversation history and exit (or combine with -i)
+          -S, --show [range]              Show full interaction content (range e.g. 3 or 3-7)
           -h, --help                      Display this help message
           -v, --version                   Display version information
           -m, --model MODEL               Override Anthropic model

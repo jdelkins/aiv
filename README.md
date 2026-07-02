@@ -20,6 +20,10 @@ location detection.
   API requests
 - **Per-request output mode control** via `-C` (conversational) and `-X` (code-only) flags
 - **Inline history inspection** via `-H`/`--history`, without needing to enter the REPL
+- **Inline content inspection** via `-S`/`--show`, to view full interaction content without entering the REPL
+- **Safe destructive operations**: `--reset` skips its confirmation prompt only
+  when invoked non-interactively with piped stdin; typed at a terminal or inside
+  the REPL, it always asks first
 
 
 ## Installation
@@ -98,7 +102,9 @@ context, sends the prompt, and prints history, all in one command.
 #### Options
 
 - `-c [pattern|-]`: Add context from files (filename or quoted glob pattern) or stdin (-)
-- `-R, --reset`: Reset conversation thread
+- `-R, --reset`: Reset conversation thread. Prompts for confirmation unless
+  invoked non-interactively with piped stdin (e.g. `echo | aiv -R`), in which
+  case it resets immediately.
 - `-C`: Conversational mode — appends formatting instructions to the user prompt
   that encourage markdown output with triple backticks where appropriate
 - `-X`: Code-only mode — appends formatting instructions to the user prompt that
@@ -110,6 +116,9 @@ context, sends the prompt, and prints history, all in one command.
 - `-H, --history [range]`: Show conversation history and exit. Combine with `-i`
   to view history and then remain in the REPL. Accepts an optional range, e.g.
   `-H 3-7`.
+- `-S, --show [range]`: Show full content of one or more interactions and exit.
+  Accepts an optional range, e.g. `-S 3-7`; defaults to the entire conversation
+  if no range is given. Combine with `-i` to remain in the REPL afterward.
 - `-m MODEL`: Use specified model
 - `-s [prompt]`: Override system prompt
 - `-h, -v`: Display help/version information
@@ -137,7 +146,7 @@ terminal (`/dev/tty`) for interactive input afterward.
 | Command | Description |
 |---|---|
 | `!history [range]` | Show conversation history (e.g. `!history 3-7`) |
-| `!show <num> [role] [--raw\|-r]` | Show full content of an interaction |
+| `!show <range> [role] [--raw\|-r]` | Show full content of one or more interactions (e.g. `!show 3-7`) |
 | `!delete <range>` | Delete interactions with preview and confirmation |
 | `!reset` | Wipe the entire conversation with confirmation |
 | `!context <path>` | Add a file to context (equivalent to `aiv -c <path>`) |
@@ -179,13 +188,19 @@ aiv -c old_version.py -c new_version.py "What are the key differences?"
 aiv -i -c main.py "Walk me through this file"
 ```
 
-### History Inspection
+### History and Content Inspection
 ```bash
 # Show full history and exit
 aiv -H
 
 # Show a specific range and exit
 aiv --history 3-7
+
+# Show full content of interactions 3 through 7
+aiv -S 3-7
+
+# Show full content of the entire conversation
+aiv -S
 
 # Add context, ask a question, review history, then continue in the REPL
 aiv -c foo.py -H -i "How does this file fit into the project?"
@@ -204,6 +219,9 @@ git diff HEAD~1 | aiv "Review this commit for potential issues"
 
 # System analysis
 df -h | aiv "Analyze disk usage and suggest optimizations"
+
+# Reset without confirmation in a script (piped stdin skips the prompt)
+echo | aiv -R
 ```
 
 ### Conversation Workflows
@@ -217,7 +235,7 @@ aiv -C "What about using Redis vs in-memory caching?"
 # Add specific context
 aiv -C -c current_api.py "How would this integrate with my existing API?"
 
-# Start a fresh topic
+# Start a fresh topic (prompts for confirmation, since this is a direct terminal invocation)
 aiv -R "Completely unrelated question"
 ```
 
@@ -282,12 +300,13 @@ aiv [-c "./*"] "create a README for this project"
 ### Command Pipeline
 
 Internally, every invocation of `aiv` is translated into an ordered list of
-commands (add context, send prompt, show history, reset, enter REPL, etc.) which
-are executed in sequence against a shared session context. This is the same
-execution path whether you're running a single one-shot command or interacting
-inside the REPL — REPL commands (`!history`, `!context`, etc.) are the exact
-same operations as their command-line equivalents (`-H`, `-c`, etc.), just
-invoked interactively. There is no subprocess indirection between the two modes.
+commands (add context, send prompt, show history, show content, reset, enter
+REPL, etc.) which are executed in sequence against a shared session context.
+This is the same execution path whether you're running a single one-shot
+command or interacting inside the REPL — REPL commands (`!history`, `!show`,
+`!context`, etc.) are the exact same operations as their command-line
+equivalents (`-H`, `-S`, `-c`, etc.), just invoked interactively. There is no
+subprocess indirection between the two modes.
 
 ### Output Mode Flags (-C and -X)
 
@@ -322,6 +341,15 @@ When using only the `-c` option without providing a prompt and normal stdin:
 - Context is stored in the conversation file for future use
 - No output is generated
 - Useful for building up context before asking questions
+
+### Confirmation Behaviour for Destructive Operations
+
+`--reset` (and the REPL's `!delete`) ask for confirmation before wiping or
+removing conversation state, except in one case: a non-interactive `aiv -R`
+invocation with piped stdin skips the prompt, since that pattern implies a
+scripted or automated context where no one is present to answer a y/n prompt.
+Any other invocation — typed directly at a terminal, or issued from inside the
+REPL — always confirms first.
 
 ### Per-Project Conversation State
 

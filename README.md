@@ -9,7 +9,7 @@ location detection.
 
 - **Editor-optimized design** for seamless integration with Helix and other editors
 - **Terminal-friendly interface** for command-line workflows and automation
-- **Interactive REPL** (`aiv-repl` or `aiv -i`) for conversational sessions with history management
+- **Interactive REPL** (`aiv -i`) for conversational sessions with history management
 - **Smart context detection** that automatically identifies source files and line locations
 - **Per-project conversation state** scoped to the current git repository
 - **Pipe-friendly interface** that works with any Unix tool
@@ -19,6 +19,7 @@ location detection.
   a prompt and normal stdin, context is saved to conversation file without making
   API requests
 - **Per-request output mode control** via `-C` (conversational) and `-X` (code-only) flags
+- **Inline history inspection** via `-H`/`--history`, without needing to enter the REPL
 
 
 ## Installation
@@ -47,7 +48,7 @@ nix profile install github:jdelkins/aiv
    pip install anthropic prompt-toolkit rich
    ```
    You will also need [glow](https://github.com/charmbracelet/glow) on your PATH
-   for the REPL to render markdown responses.
+   for markdown responses to render nicely.
 
 3. Install the package:
    ```bash
@@ -82,13 +83,17 @@ nix profile install github:jdelkins/aiv
    prompt sets a sensible default, and the mode flags override formatting behaviour
    only for the turn they are applied to, without permanently altering the session.
 
-## Tools
-
-### `aiv` — pipe-oriented CLI
+## The `aiv` command
 
 ```
 aiv [options] [prompt]
 ```
+
+Each invocation of `aiv` builds an ordered pipeline of operations from its
+arguments — adding context, sending a prompt, showing history, entering the
+REPL — and executes them in sequence. This means flags can be freely combined
+in a single invocation; e.g. `aiv -c foo.py -H "explain this file"` adds
+context, sends the prompt, and prints history, all in one command.
 
 #### Options
 
@@ -99,9 +104,12 @@ aiv [options] [prompt]
 - `-X`: Code-only mode — appends formatting instructions to the user prompt that
   suppress markdown and triple backtick fences; caveats are emitted as code comments.
   Recommended when piping output back into an editor or shell pipeline.
-- `-i, --repl`: Launch the interactive REPL. If a prompt or context files are
-  also supplied, they are processed as the first turn inside the REPL (with output
-  rendered through `glow`) before the interactive prompt appears.
+- `-i, --repl`: Launch the interactive REPL after processing any other options
+  given on the command line (context, prompt, history, etc. all run first, in order,
+  then the REPL takes over the terminal for further turns).
+- `-H, --history [range]`: Show conversation history and exit. Combine with `-i`
+  to view history and then remain in the REPL. Accepts an optional range, e.g.
+  `-H 3-7`.
 - `-m MODEL`: Use specified model
 - `-s [prompt]`: Override system prompt
 - `-h, -v`: Display help/version information
@@ -109,15 +117,20 @@ aiv [options] [prompt]
 Note: `-C` and `-X` are mutually exclusive. When `-i` is used without either,
 `-C` is implied.
 
-### `aiv-repl` — interactive REPL
+### Interactive REPL (`aiv -i`)
 
-`aiv-repl` provides an interactive session for conversational use. It is
-equivalent to `aiv -i` with no initial prompt. It renders responses via `glow`
-for rich markdown display and shares the same conversation file as `aiv`, so
-context built up in one tool is immediately available in the other.
+`aiv -i` drops into an interactive session for conversational use. It renders
+responses via `glow` for rich markdown display and shares the same conversation
+file as any other `aiv` invocation, so context and history built up via pipes
+or one-shot commands is immediately available once you enter the REPL, and
+vice versa.
 
 Prompts are submitted with **Alt-Enter** (or Escape then Enter), allowing Enter
 to be used freely for multiline input.
+
+If stdin is piped when `-i` is used (e.g. `cat file | aiv -i`), that input is
+consumed before entering the loop, and the REPL reattaches to the controlling
+terminal (`/dev/tty`) for interactive input afterward.
 
 #### REPL commands
 
@@ -149,8 +162,6 @@ aiv -C "Walk me through the tradeoffs of different caching strategies"
 
 # Interactive REPL session
 aiv -i
-# or equivalently:
-aiv-repl
 ```
 
 ### Working with Files
@@ -166,6 +177,18 @@ aiv -c old_version.py -c new_version.py "What are the key differences?"
 
 # Load context and launch REPL in one step
 aiv -i -c main.py "Walk me through this file"
+```
+
+### History Inspection
+```bash
+# Show full history and exit
+aiv -H
+
+# Show a specific range and exit
+aiv --history 3-7
+
+# Add context, ask a question, review history, then continue in the REPL
+aiv -c foo.py -H -i "How does this file fit into the project?"
 ```
 
 ### Pipeline Integration
@@ -256,6 +279,16 @@ aiv [-c "./*"] "create a README for this project"
 
 ## Mechanism
 
+### Command Pipeline
+
+Internally, every invocation of `aiv` is translated into an ordered list of
+commands (add context, send prompt, show history, reset, enter REPL, etc.) which
+are executed in sequence against a shared session context. This is the same
+execution path whether you're running a single one-shot command or interacting
+inside the REPL — REPL commands (`!history`, `!context`, etc.) are the exact
+same operations as their command-line equivalents (`-H`, `-c`, etc.), just
+invoked interactively. There is no subprocess indirection between the two modes.
+
 ### Output Mode Flags (-C and -X)
 
 Rather than modifying the system prompt, `-C` and `-X` append a formatting
@@ -298,7 +331,7 @@ AIV scopes conversation history to the current git repository:
 - Conversation is preserved across invocations by default
 - Use `-R` or `--reset` to start a fresh conversation
 
-Both `aiv` and `aiv-repl` read and write the same conversation file, so you can
+Every `aiv` invocation reads and writes the same conversation file, so you can
 freely switch between pipeline use and interactive use within the same session.
 
 It is recommended to add `.aiv-conversation.json` to your global gitignore:
@@ -326,24 +359,4 @@ echo ".aiv-conversation.json" >> ~/.gitignore_global
   patterns before they reached the script when unquoted. The Python version
   handles glob expansion internally and behaves consistently whether patterns are
   quoted or unquoted.
-- **No curl dependency**: HTTP is handled natively via the Anthropic Python SDK
-  rather than shelling out to `curl`.
-- **Streaming**: Responses are streamed to stdout in real time as before, but
-  via the SDK's streaming interface rather than raw HTTP chunked transfer.
-- **`-r` flag removed**: The shell version attempted to repeat the stdin portion
-  of the input. This flag is not present in the Python version.
-- **Output mode flags**: `-C` and `-X` are new. They inject per-request
-  formatting instructions into the user prompt rather than altering the system
-  prompt, keeping behaviour predictable and the system prompt stable.
-- **Integrated REPL**: `aiv -i` launches an interactive session directly, optionally
-  with an initial prompt and context files that are processed as the first REPL turn.
-
-## License
-
-MIT License
-
----
-
-AIV transforms both your terminal and editor into an AI-powered development
-environment, making it easy to get contextual assistance without disrupting
-your workflow.
+- **No curl dependency**: HTTP

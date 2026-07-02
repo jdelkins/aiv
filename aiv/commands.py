@@ -84,6 +84,11 @@ class ExitCommand:
     pass
 
 
+@dataclass
+class NoOpCommand:
+    pass
+
+
 Command = (
     ContextCommand
     | PromptCommand
@@ -94,6 +99,7 @@ Command = (
     | HelpCommand
     | ReplCommand
     | ExitCommand
+    | NoOpCommand
 )
 
 
@@ -457,7 +463,7 @@ def parse_command(text: str) -> Command:
         console.print(
             f"[red]Unknown command: {cmd}. Type !help for available commands.[/red]"
         )
-        return ExitCommand()
+        return NoOpCommand()
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +543,8 @@ def run_command(cmd: Command, ctx: PipelineContext) -> None:
         run_repl_loop(ctx)
     elif isinstance(cmd, ExitCommand):
         raise QuitPipeline()
+    elif isinstance(cmd, NoOpCommand):
+        pass
 
 
 def run_pipeline(commands: list[Command], ctx: PipelineContext) -> None:

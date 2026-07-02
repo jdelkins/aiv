@@ -110,6 +110,9 @@ class PipelineContext:
     stdin_data: str | None = None
     api_key: str = ""
     max_tokens: int = 4096
+    interactive: bool = (
+        False  # set True by run_repl_loop; controls confirmation prompts
+    )
 
     @property
     def mode_suffix(self) -> str:
@@ -259,7 +262,7 @@ def cmd_show(cmd: ShowCommand, ctx: PipelineContext):
             render_output(content_str, ctx)
 
 
-def cmd_delete(cmd: DeleteCommand):
+def cmd_delete(cmd: DeleteCommand, ctx: PipelineContext):
     conv_path = get_conversation_file()
     messages = load_conversation(conv_path)
     interactions = build_interactions(messages)
@@ -284,6 +287,14 @@ def cmd_delete(cmd: DeleteCommand):
                 "starting with an assistant turn, which is invalid for the Anthropic API."
             )
 
+    # !delete is only reachable interactively (from the REPL), so always confirm.
+    # If somehow called non-interactively, ctx.interactive will be False and we
+    # skip the confirmation — same logic as cmd_reset.
+    if not ctx.interactive:
+        new_interactions = interactions[: start - 1] + interactions[end:]
+        save_conversation(flatten_interactions(new_interactions), conv_path)
+        return
+
     console.print(
         f"\n[bold]Preview of interactions to be deleted ({start}-{end}):[/bold]"
     )
@@ -306,13 +317,22 @@ def cmd_delete(cmd: DeleteCommand):
     console.print(f"[green]Deleted interactions {start}-{end}.[/green]")
 
 
-def cmd_reset():
+def cmd_reset(ctx: PipelineContext):
     conv_path = get_conversation_file()
     messages = load_conversation(conv_path)
     interactions = build_interactions(messages)
+    # Confirm if interactive (inside REPL) or if no stdin was piped (direct terminal invocation).
+    # Skip confirmation if stdin was piped — the user clearly scripted this.
+    should_confirm = ctx.interactive or ctx.stdin_data is None
 
     if not interactions:
-        console.print("[yellow]Conversation is already empty.[/yellow]")
+        # Only print this if someone will see it
+        if should_confirm:
+            console.print("[yellow]Conversation is already empty.[/yellow]")
+        return
+
+    if not should_confirm:
+        reset_conversation(conv_path)
         return
 
     console.print(
@@ -502,9 +522,9 @@ def run_command(cmd: Command, ctx: PipelineContext) -> None:
     elif isinstance(cmd, ShowCommand):
         cmd_show(cmd, ctx)
     elif isinstance(cmd, DeleteCommand):
-        cmd_delete(cmd)
+        cmd_delete(cmd, ctx)
     elif isinstance(cmd, ResetCommand):
-        cmd_reset()
+        cmd_reset(ctx)
     elif isinstance(cmd, HelpCommand):
         cmd_help()
     elif isinstance(cmd, ReplCommand):

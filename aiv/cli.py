@@ -19,7 +19,8 @@ def main():
         add_help=False,
     )
     parser.add_argument(
-        "--context", "-c",
+        "--context",
+        "-c",
         dest="context_files",
         action="append",
         default=[],
@@ -31,7 +32,9 @@ def main():
     parser.add_argument("--chat", "-C", dest="mode_chat", action="store_true")
     parser.add_argument("--code", "-X", dest="mode_code", action="store_true")
     parser.add_argument("--repl", "-i", dest="repl", action="store_true")
-    parser.add_argument("--history", "-H", dest="history", nargs="?", const=True, default=None)
+    parser.add_argument(
+        "--history", "-H", dest="history", nargs="?", const=True, default=None
+    )
     parser.add_argument("--help", "-h", dest="help", action="store_true")
     parser.add_argument("--version", "-v", dest="version", action="store_true")
     parser.add_argument("prompt", nargs="*")
@@ -79,17 +82,9 @@ Options : -c, --context [file_pattern|-]  Add context from files (glob pattern) 
         print("aiv: max_tokens must be a positive integer", file=sys.stderr)
         sys.exit(1)
 
-    ctx = PipelineContext(
-        model=args.model or config.get("model", "claude-3-7-sonnet-latest"),
-        sys_prompt=args.sys_prompt or config.get("sys_prompt", ""),
-        mode_code=args.mode_code,
-        api_key=api_key,
-        max_tokens=int(max_tokens_raw),
-    )
-
     # ---------------------------------------------------------------------------
-    # Stdin handling — must be done before building the pipeline so that
-    # ctx.stdin_data is set before commands_from_args / run_pipeline run.
+    # Stdin handling — must be done before building context or PipelineContext so
+    # that ctx.stdin_data is set correctly before commands_from_args runs.
     #
     # Rules:
     #   - If "-" is explicit in context_files: read stdin into ctx.stdin_data;
@@ -101,17 +96,28 @@ Options : -c, --context [file_pattern|-]  Add context from files (glob pattern) 
     # ---------------------------------------------------------------------------
     stdin_is_tty = sys.stdin.isatty()
     has_explicit_stdin_context = "-" in args.context_files
+    stdin_data: str | None = None
 
     if not stdin_is_tty:
         raw = sys.stdin.read()
         if has_explicit_stdin_context:
-            ctx.stdin_data = raw
+            stdin_data = raw
         else:
             prompt_text = " ".join(args.prompt) if args.prompt else ""
             if not prompt_text:
                 args.prompt = [raw.rstrip("\n")]
             else:
-                ctx.stdin_data = raw
+                stdin_data = raw
+
+    ctx = PipelineContext(
+        model=args.model or config.get("model", "claude-3-7-sonnet-latest"),
+        sys_prompt=args.sys_prompt or config.get("sys_prompt", ""),
+        mode_code=args.mode_code,
+        api_key=api_key,
+        max_tokens=int(max_tokens_raw),
+        stdin_data=stdin_data,
+        # interactive stays False here; run_repl_loop sets it True if -i is used
+    )
 
     commands: list[Command] = commands_from_args(args)
     run_pipeline(commands, ctx)

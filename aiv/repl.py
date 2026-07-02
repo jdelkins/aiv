@@ -11,6 +11,7 @@ from prompt_toolkit.history import FileHistory
 from aiv.common import (
     get_version,
     find_repo_root,
+    load_config,
     CONFIG_DIR,
 )
 from aiv.commands import (
@@ -45,8 +46,14 @@ def run_repl_loop(ctx: PipelineContext):
             sys.stdin = open("/dev/tty", "r")
         except OSError:
             from rich.console import Console
-            Console().print("[red]Cannot open /dev/tty — no terminal available for REPL.[/red]")
+
+            Console().print(
+                "[red]Cannot open /dev/tty — no terminal available for REPL.[/red]"
+            )
             return
+
+    # Mark context as interactive so cmd_reset/cmd_delete show confirmation prompts
+    ctx.interactive = True
 
     repo_root = find_repo_root()
     history_file = (repo_root if repo_root is not None else CONFIG_DIR) / ".aiv-history"
@@ -77,10 +84,10 @@ def run_repl_loop(ctx: PipelineContext):
 
 
 def run_cli():
-    """Entry point for the aiv-repl console script."""
+    """Entry point for the aiv-repl console script (kept for backwards compatibility)."""
     parser = argparse.ArgumentParser(
         prog="aiv-repl",
-        description="aiv interactive REPL",
+        description="aiv interactive REPL (use `aiv -i` instead)",
         add_help=False,
     )
     parser.add_argument("--model", "-m", dest="model", default=None)
@@ -93,7 +100,7 @@ def run_cli():
 
     if args.help:
         print(
-            """aiv-repl - aiv interactive REPL
+            """aiv-repl - aiv interactive REPL (use `aiv -i` instead)
 Usage   : aiv-repl [options]
 Options : -R, --reset            Wipe conversation on startup
           -X, --code             Code-only mode (no markdown, caveats as comments)
@@ -109,7 +116,6 @@ Options : -R, --reset            Wipe conversation on startup
         print(f"aiv-repl {get_version()}", file=sys.stderr)
         sys.exit(0)
 
-    # aiv-repl always needs a terminal — check early and bail clearly
     if not sys.stdin.isatty():
         try:
             sys.stdin = open("/dev/tty", "r")
@@ -117,7 +123,6 @@ Options : -R, --reset            Wipe conversation on startup
             print("aiv-repl: no terminal available", file=sys.stderr)
             sys.exit(1)
 
-    from aiv.common import load_config
     try:
         config = load_config()
     except FileNotFoundError as e:
@@ -134,12 +139,14 @@ Options : -R, --reset            Wipe conversation on startup
         print("aiv-repl: max_tokens must be a positive integer", file=sys.stderr)
         sys.exit(1)
 
+    ## prompt: This is from repl.py, line 142
     ctx = PipelineContext(
         model=args.model or config.get("model", "claude-3-7-sonnet-latest"),
         sys_prompt=args.sys_prompt or config.get("sys_prompt", ""),
         mode_code=args.mode_code,
         api_key=api_key,
         max_tokens=int(max_tokens_raw),
+        interactive=True,
     )
 
     commands: list[Command] = []

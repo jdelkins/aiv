@@ -1,11 +1,8 @@
-#!/usr/bin/env python3
-
 from __future__ import annotations
 
 import glob
 import re
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
 from rich.console import Console
@@ -13,8 +10,6 @@ from rich.table import Table
 from anthropic.types import MessageParam
 
 from aiv.common import (
-    MODE_CHAT_SUFFIX,
-    MODE_CODE_SUFFIX,
     get_conversation_file,
     load_conversation,
     save_conversation,
@@ -28,100 +23,35 @@ from aiv.common import (
     parse_range,
     build_user_content,
     run_turn,
-    CONFIG_DIR,
+)
+from aiv.models import (
+    InteractionMode,
+    Command,
+    ContextCommand,
+    PromptCommand,
+    HistoryCommand,
+    ShowCommand,
+    DeleteCommand,
+    ResetCommand,
+    HelpCommand,
+    ReplCommand,
+    ExitCommand,
+    NoOpCommand,
+    SetModelCommand,
+    SetMaxTokensCommand,
+    SetSysPromptCommand,
+    SetModeCommand,
+    PipelineContext,
+)
+from aiv.specs import (
+    COMMAND_SPECS,
+    COMMAND_LOOKUP,
+    OPTION_LOOKUP,
+    PROMPT_SPEC,
+    CommandSpec,
 )
 
 console = Console()
-
-
-# ---------------------------------------------------------------------------
-# Command dataclasses
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class ContextCommand:
-    path: str  # glob pattern or "-" for stdin
-
-
-@dataclass
-class PromptCommand:
-    text: str
-
-
-@dataclass
-class HistoryCommand:
-    range: str | None = None
-
-
-@dataclass
-class ShowCommand:
-    args: str
-
-
-@dataclass
-class DeleteCommand:
-    range: str
-
-
-@dataclass
-class ResetCommand:
-    pass
-
-
-@dataclass
-class HelpCommand:
-    pass
-
-
-@dataclass
-class ReplCommand:
-    pass
-
-
-@dataclass
-class ExitCommand:
-    pass
-
-
-@dataclass
-class NoOpCommand:
-    pass
-
-
-Command = (
-    ContextCommand
-    | PromptCommand
-    | HistoryCommand
-    | ShowCommand
-    | DeleteCommand
-    | ResetCommand
-    | HelpCommand
-    | ReplCommand
-    | ExitCommand
-    | NoOpCommand
-)
-
-
-# ---------------------------------------------------------------------------
-# PipelineContext
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class PipelineContext:
-    model: str = "claude-3-7-sonnet-latest"
-    sys_prompt: str = ""
-    mode_code: bool = False
-    stdin_data: str | None = None
-    api_key: str = ""
-    max_tokens: int = 4096
-    interactive: bool = False  # set True by run_repl_loop
-    piped_stdin: bool = False  # True if stdin was a pipe at invocation
-
-    @property
-    def mode_suffix(self) -> str:
-        return MODE_CODE_SUFFIX if self.mode_code else MODE_CHAT_SUFFIX
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +80,7 @@ def render_output(text: str, ctx: PipelineContext):
     """Canonical output renderer: glow for markdown, raw print for code mode or plain text."""
     import subprocess
 
-    if not ctx.mode_code and looks_like_markdown(text):
+    if ctx.mode != InteractionMode.CODE and looks_like_markdown(text):
         subprocess.run(["glow", "-"], input=text, text=True)
     else:
         print(text)
@@ -288,9 +218,6 @@ def cmd_delete(cmd: DeleteCommand, ctx: PipelineContext):
                 "starting with an assistant turn, which is invalid for the Anthropic API."
             )
 
-    # Same confirmation logic as cmd_reset: confirm if interactive (REPL) or if
-    # nothing was piped into this invocation. Skip confirmation only when stdin
-    # was explicitly piped (a scripted, non-interactive invocation).
     should_confirm = ctx.interactive or not ctx.piped_stdin
 
     if not should_confirm:
@@ -324,12 +251,9 @@ def cmd_reset(ctx: PipelineContext):
     conv_path = get_conversation_file()
     messages = load_conversation(conv_path)
     interactions = build_interactions(messages)
-    # Confirm if interactive (inside REPL) or if no stdin was piped (direct terminal invocation).
-    # Skip confirmation if stdin was piped — the user clearly scripted this.
     should_confirm = ctx.interactive or not ctx.piped_stdin
 
     if not interactions:
-        # Only print this if someone will see it
         if should_confirm:
             console.print("[yellow]Conversation is already empty.[/yellow]")
         return
@@ -401,27 +325,43 @@ def cmd_prompt(cmd: PromptCommand, ctx: PipelineContext):
     render_output(response_text, ctx)
 
 
+def cmd_set_model(cmd: SetModelCommand, ctx: PipelineContext):
+    ctx.model = cmd.model
+    if ctx.interactive:
+        console.print(f"[green]Model set to {cmd.model}[/green]")
+
+
+def cmd_set_max_tokens(cmd: SetMaxTokensCommand, ctx: PipelineContext):
+    ctx.max_tokens = cmd.max_tokens
+    if ctx.interactive:
+        console.print(f"[green]max_tokens set to {cmd.max_tokens}[/green]")
+
+
+def cmd_set_sys_prompt(cmd: SetSysPromptCommand, ctx: PipelineContext):
+    ctx.sys_prompt = cmd.sys_prompt
+    if ctx.interactive:
+        console.print(f"[green]sys_prompt updated[/green]")
+
+
+def cmd_set_mode(cmd: SetModeCommand, ctx: PipelineContext):
+    ctx.mode = cmd.mode
+    if ctx.interactive:
+        label = cmd.mode.value if cmd.mode is not None else "default"
+        console.print(f"[green]Mode set to {label}[/green]")
+
+
 def cmd_help():
     table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
     table.add_column(style="cyan", no_wrap=True)
     table.add_column(style="dim")
 
-    commands = [
-        ("!history \[range]", "Show conversation history (optional range, e.g. 3-7)"),
-        (
-            "!show <range> \[role] \[--raw|-r]",
-            "Show full turn (role: user|assistant, default: both)",
-        ),
-        ("!delete <range>", "Delete interactions with preview + confirm"),
-        ("!reset", "Wipe conversation (same as aiv -R), with confirm"),
-        ("!context <path>", "Add file to context (glob pattern or - for stdin)"),
-        ("!help", "Show this help"),
-        ("!quit, !exit", "End the session"),
-    ]
-
     console.print("\n[bold cyan]aiv REPL commands[/bold cyan]\n")
-    for c, desc in commands:
-        table.add_row(c, desc)
+    for spec in COMMAND_SPECS:
+        if not spec.names:
+            continue  # skip the bare-prompt pseudo-spec
+        name = ", ".join(spec.names)
+        full_usage = f"{name} {spec.usage}".strip()
+        table.add_row(full_usage, spec.help)
     console.print(table)
     console.print(
         "\n  [dim]Alt-Enter (or Escape then Enter) submits a prompt "
@@ -440,30 +380,17 @@ def parse_command(text: str) -> Command:
         return PromptCommand(text=stripped)
 
     parts = stripped.split(None, 1)
-    cmd = parts[0].lower()
+    name = parts[0].lower()
     args = parts[1] if len(parts) > 1 else ""
 
-    if cmd == "!history":
-        return HistoryCommand(range=args.strip() or None)
-    elif cmd == "!show":
-        return ShowCommand(args=args)
-    elif cmd == "!delete":
-        return DeleteCommand(range=args.strip())
-    elif cmd == "!reset":
-        return ResetCommand()
-    elif cmd == "!context":
-        return ContextCommand(path=args.strip())
-    elif cmd == "!help":
-        return HelpCommand()
-    elif cmd == "!repl":
-        return ReplCommand()
-    elif cmd in ("!quit", "!exit"):
-        return ExitCommand()
-    else:
+    spec = COMMAND_LOOKUP.get(name)
+    if spec is None:
         console.print(
-            f"[red]Unknown command: {cmd}. Type !help for available commands.[/red]"
+            f"[red]Unknown command: {name}. Type !help for available commands.[/red]"
         )
         return NoOpCommand()
+
+    return spec.parse(args)
 
 
 # ---------------------------------------------------------------------------
@@ -474,41 +401,42 @@ def parse_command(text: str) -> Command:
 def commands_from_args(args) -> list[Command]:
     """
     Translate a parsed argparse Namespace into an ordered Command pipeline.
-
-    Ordering:
-      1. ResetCommand (if --reset)
-      2. ContextCommand per -c value
-      3. PromptCommand (if prompt given)
-      4. HistoryCommand (if --history)
-      5. ShowCommand (if --show)
-      6. ReplCommand (if -i), otherwise pipeline ends naturally
+    Each CommandSpec with a long_option is checked against the namespace;
+    matching values emit a Command at the spec's precedence. The list is
+    stable-sorted by precedence so registry/input order is preserved within
+    equal-precedence groups (e.g. multiple --context flags).
     """
-    commands: list[Command] = []
+    pending: list[tuple[int, Command]] = []
 
-    if getattr(args, "reset", False):
-        commands.append(ResetCommand())
+    for spec in COMMAND_SPECS:
+        if not spec.long_option:
+            continue
 
-    for pattern in getattr(args, "context_files", []):
-        commands.append(ContextCommand(path=pattern))
+        dest = spec.long_option.lstrip("-").replace("-", "_")
+        val = getattr(args, dest, None)
 
-    prompt_text = " ".join(args.prompt) if args.prompt else ""
+        if val is None or val is False:
+            continue
+
+        # action="append" produces a list (e.g. --context used multiple times)
+        if isinstance(val, list):
+            for item in val:
+                sub_args = item if isinstance(item, str) else ""
+                pending.append((spec.precedence, spec.parse(sub_args)))
+        elif val is True:
+            # store_true / store_const flags
+            pending.append((spec.precedence, spec.parse("")))
+        else:
+            pending.append((spec.precedence, spec.parse(str(val))))
+
+    # Inject positional prompt at its declared precedence
+    prompt_text = " ".join(args.prompt) if getattr(args, "prompt", None) else ""
     if prompt_text:
-        commands.append(PromptCommand(text=prompt_text))
+        pending.append((PROMPT_SPEC.precedence, PromptCommand(text=prompt_text)))
 
-    history_val = getattr(args, "history", None)
-    if history_val is not None:
-        range_str = None if history_val is True else str(history_val)
-        commands.append(HistoryCommand(range=range_str))
-
-    show_val = getattr(args, "show", None)
-    if show_val is not None:
-        range_str = "1-" if show_val is True else str(show_val)
-        commands.append(ShowCommand(args=range_str))
-
-    if getattr(args, "repl", False):
-        commands.append(ReplCommand())
-
-    return commands
+    # Stable sort: equal precedence preserves original input/registry order
+    pending.sort(key=lambda t: t[0])
+    return [cmd for _, cmd in pending]
 
 
 # ---------------------------------------------------------------------------
@@ -534,6 +462,14 @@ def run_command(cmd: Command, ctx: PipelineContext) -> None:
         cmd_delete(cmd, ctx)
     elif isinstance(cmd, ResetCommand):
         cmd_reset(ctx)
+    elif isinstance(cmd, SetModelCommand):
+        cmd_set_model(cmd, ctx)
+    elif isinstance(cmd, SetMaxTokensCommand):
+        cmd_set_max_tokens(cmd, ctx)
+    elif isinstance(cmd, SetSysPromptCommand):
+        cmd_set_sys_prompt(cmd, ctx)
+    elif isinstance(cmd, SetModeCommand):
+        cmd_set_mode(cmd, ctx)
     elif isinstance(cmd, HelpCommand):
         cmd_help()
     elif isinstance(cmd, ReplCommand):

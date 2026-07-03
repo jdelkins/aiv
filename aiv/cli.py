@@ -4,76 +4,74 @@ import sys
 import argparse
 
 from aiv.common import get_version, load_config
-from aiv.commands import (
-    PipelineContext,
-    Command,
-    run_pipeline,
-    commands_from_args,
-)
+from aiv.models import PipelineContext, InteractionMode
+from aiv.specs import COMMAND_SPECS, OPTION_LOOKUP
+from aiv.commands import commands_from_args, run_pipeline, cmd_help
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="aiv",
         description="AI Valve: Pipes for AI",
         add_help=False,
     )
-    parser.add_argument(
-        "--context",
-        "-c",
-        dest="context_files",
-        action="append",
-        default=[],
-        metavar="file_pattern",
-    )
-    parser.add_argument("--reset", "-R", dest="reset", action="store_true")
-    parser.add_argument("--model", "-m", dest="model", default=None)
-    parser.add_argument("--sys-prompt", "-s", dest="sys_prompt", default=None)
-    parser.add_argument("--chat", "-C", dest="mode_chat", action="store_true")
-    parser.add_argument("--code", "-X", dest="mode_code", action="store_true")
-    parser.add_argument("--repl", "-i", dest="repl", action="store_true")
-    parser.add_argument(
-        "--history", "-H", dest="history", nargs="?", const=True, default=None
-    )
-    parser.add_argument(
-        "--show",
-        "-S",
-        dest="show",
-        nargs="?",
-        const=True,
-        default=None,
-        metavar="range",
-    )
-    parser.add_argument("--help", "-h", dest="help", action="store_true")
+
+    # Register all CLI-exposed commands from the registry
+    for spec in COMMAND_SPECS:
+        if not spec.long_option or not spec.argparse_kwargs:
+            continue
+        flags = [spec.long_option]
+        if spec.short_option:
+            flags.insert(0, spec.short_option)
+        dest = spec.long_option.lstrip("-").replace("-", "_")
+        parser.add_argument(*flags, dest=dest, **spec.argparse_kwargs)
+
+    # --version is not a Command (no pipeline action, just print and exit)
     parser.add_argument("--version", "-v", dest="version", action="store_true")
+
     parser.add_argument("prompt", nargs="*")
+    return parser
+
+
+def print_cli_help():
+    lines = [
+        "aiv - AI Valve: Pipes for AI",
+        "Usage   : aiv [options] [prompt]",
+        "Options :",
+    ]
+    for spec in COMMAND_SPECS:
+        if not spec.long_option:
+            continue
+        flags = spec.long_option
+        if spec.short_option:
+            flags = f"{spec.short_option}, {flags}"
+        arg_hint = f" {spec.usage.upper()}" if spec.usage else ""
+        # left-align the flags+hint column at 36 chars
+        col = f"  {flags}{arg_hint}"
+        lines.append(f"{col:<38} {spec.help}")
+    # --version is outside the registry
+    lines.append(f"  {'--version, -v':<36} Display version information")
+    print("\n".join(lines), file=sys.stderr)
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
-    if args.help:
-        print(
-            """aiv - AI Valve: Pipes for AI
-Usage   : aiv [options] [prompt]
-Options : -c, --context [file_pattern|-]  Add context from files (glob pattern) or stdin (-)
-          -R, --reset                     Reset conversation thread
-          -C, --chat                      Conversational mode (markdown enabled)
-          -X, --code                      Code-only mode (no markdown, caveats as comments)
-          -i, --repl                      Enter interactive REPL (after processing any prompt)
-          -H, --history [range]           Show conversation history and exit (or combine with -i)
-          -S, --show [range]              Show full interaction content (range e.g. 3 or 3-7)
-          -h, --help                      Display this help message
-          -v, --version                   Display version information
-          -m, --model MODEL               Override Anthropic model
-          -s, --sys-prompt PROMPT         Override system prompt""",
-            file=sys.stderr,
-        )
+    if getattr(args, "help", False):
+        print_cli_help()
         sys.exit(0)
 
-    if args.version:
+    if getattr(args, "version", False):
         print(f"aiv {get_version()}", file=sys.stderr)
         sys.exit(0)
 
-    if args.mode_chat and args.mode_code:
-        print("aiv: -C and -X are mutually exclusive", file=sys.stderr)
+    # Mutual exclusion: --chat and --code map to the same ctx.mode field;
+    # both being set is user error. Checked here rather than in argparse
+    # (add_mutually_exclusive_group) so the registry-driven add_argument loop
+    # stays simple and unconditional.
+    if getattr(args, "chat", False) and getattr(args, "code", False):
+        print("aiv: --chat and --code are mutually exclusive", file=sys.stderr)
         sys.exit(1)
 
     try:
@@ -93,8 +91,8 @@ Options : -c, --context [file_pattern|-]  Add context from files (glob pattern) 
         sys.exit(1)
 
     # ---------------------------------------------------------------------------
-    # Stdin handling — must be done before building context or PipelineContext so
-    # that ctx.stdin_data is set correctly before commands_from_args runs.
+    # Stdin handling — must be done before building PipelineContext so that
+    # ctx.stdin_data is set correctly before commands_from_args runs.
     #
     # Rules:
     #   - If "-" is explicit in context_files: read stdin into ctx.stdin_data;
@@ -105,7 +103,8 @@ Options : -c, --context [file_pattern|-]  Add context from files (glob pattern) 
     #         consumed by the first PromptCommand call.
     # ---------------------------------------------------------------------------
     stdin_is_tty = sys.stdin.isatty()
-    has_explicit_stdin_context = "-" in args.context_files
+    context_files = getattr(args, "context", []) or []
+    has_explicit_stdin_context = "-" in context_files
     stdin_data: str | None = None
 
     if not stdin_is_tty:
@@ -119,19 +118,26 @@ Options : -c, --context [file_pattern|-]  Add context from files (glob pattern) 
             else:
                 stdin_data = raw
 
+    # Determine initial mode from CLI flags; SetModeCommand(s) in the pipeline
+    # will override this if --chat or --code were passed, but we also set it here
+    # so PipelineContext starts in the right state for any pre-prompt commands.
+    initial_mode: InteractionMode | None = None
+    if getattr(args, "chat", False):
+        initial_mode = InteractionMode.CHAT
+    elif getattr(args, "code", False):
+        initial_mode = InteractionMode.CODE
+
     ctx = PipelineContext(
-        model=args.model or config.get("model", "claude-3-7-sonnet-latest"),
-        sys_prompt=args.sys_prompt or config.get("sys_prompt", ""),
-        mode_code=args.mode_code,
+        model=config.get("model", "claude-3-7-sonnet-latest"),
+        sys_prompt=config.get("sys_prompt", ""),
+        mode=initial_mode,
         api_key=api_key,
         max_tokens=int(max_tokens_raw),
         stdin_data=stdin_data,
-        # interactive stays False here; run_repl_loop sets it True if -i is used
         piped_stdin=not stdin_is_tty,
     )
 
-    commands: list[Command] = commands_from_args(args)
-    run_pipeline(commands, ctx)
+    run_pipeline(commands_from_args(args), ctx)
 
 
 if __name__ == "__main__":

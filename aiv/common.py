@@ -90,8 +90,7 @@ def reset_conversation(path: Path):
 def append_user_turn(content: str) -> list[MessageParam]:
     """
     Append a user message to the current conversation file and return the
-    updated messages list. Shared by cmd_context and cmd_prompt so neither
-    needs to manually load/append/save.
+    updated messages list.
     """
     path = get_conversation_file()
     messages = load_conversation(path)
@@ -252,7 +251,7 @@ def build_user_content(
 ) -> str:
     """
     Build the user message content string from prompt, context files, and
-    optional stdin data. Canonical implementation shared by cli.py and commands.py.
+    optional stdin data.
     """
     parts = []
 
@@ -291,10 +290,7 @@ def run_turn(
     """
     Build a user turn, append it to the conversation, call the Anthropic API,
     append the assistant response, save, and return the response text.
-
-    If stream_to_stdout is True, text is printed to stdout as it streams
-    (used by cli.py in non-repl/non-pipeline mode for direct piping).
-    Otherwise the full response is returned silently for the caller to render.
+    Warns in the returned text if the response was truncated by max_tokens.
     """
     content = build_user_content(prompt, context_files, stdin_data, mode_suffix)
     messages = append_user_turn(content)
@@ -310,6 +306,10 @@ def run_turn(
         response_text = ""
         for text in stream.text_stream:
             response_text += text
+        final_message = stream.get_final_message()
+
+    if final_message.stop_reason == "max_tokens":
+        response_text += "\n\n[aiv: WARNING: response truncated - max_tokens too low]"
 
     conv_path = get_conversation_file()
     messages.append({"role": "assistant", "content": response_text})

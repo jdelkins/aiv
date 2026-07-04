@@ -334,28 +334,31 @@ def cmd_prompt(cmd: PromptCommand, ctx: PipelineContext):
 
 
 def cmd_set_model(cmd: SetModelCommand, ctx: PipelineContext):
-    ctx.model = cmd.model
+    if cmd.model is not None:
+        ctx.model = cmd.model
     if ctx.interactive:
-        console.print(f"[green]Model set to {cmd.model}[/green]")
+        console.print(f"[green]Model set to: {ctx.model}[/green]")
 
 
 def cmd_set_max_tokens(cmd: SetMaxTokensCommand, ctx: PipelineContext):
-    ctx.max_tokens = cmd.max_tokens
+    if cmd.max_tokens is not None:
+        ctx.max_tokens = cmd.max_tokens
     if ctx.interactive:
-        console.print(f"[green]max_tokens set to {cmd.max_tokens}[/green]")
+        console.print(f"[green]max_tokens set to: {ctx.max_tokens}[/green]")
 
 
 def cmd_set_sys_prompt(cmd: SetSysPromptCommand, ctx: PipelineContext):
-    ctx.sys_prompt = cmd.sys_prompt
+    if cmd.sys_prompt is not None:
+        ctx.sys_prompt = cmd.sys_prompt
     if ctx.interactive:
-        console.print(f"[green]sys_prompt updated[/green]")
+        console.print(f"[green]sys_prompt set to: {ctx.sys_prompt}[/green]")
 
 
 def cmd_set_mode(cmd: SetModeCommand, ctx: PipelineContext):
     ctx.mode = cmd.mode
     if ctx.interactive:
         label = cmd.mode.value if cmd.mode is not None else "default"
-        console.print(f"[green]Mode set to {label}[/green]")
+        console.print(f"[green]Mode set to: {label}[/green]")
 
 
 def cmd_help():

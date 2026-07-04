@@ -67,7 +67,7 @@ COMMAND_SPECS: list[CommandSpec] = [
         short_option="-m",
         usage="<model>",
         help="Set the Anthropic model",
-        parse=lambda args: SetModelCommand(model=args.strip()),
+        parse=lambda args: SetModelCommand(model=args.strip() if args != "" else None),
         argparse_kwargs=dict(default=None, metavar="MODEL"),
         precedence=20,
     ),
@@ -77,7 +77,9 @@ COMMAND_SPECS: list[CommandSpec] = [
         short_option=None,
         usage="<n>",
         help="Set max output tokens",
-        parse=lambda args: SetMaxTokensCommand(max_tokens=int(args.strip())),
+        parse=lambda args: SetMaxTokensCommand(
+            max_tokens=(int(args.strip()) if args != "" else None)
+        ),
         argparse_kwargs=dict(default=None, metavar="N"),
         precedence=20,
     ),
@@ -87,7 +89,9 @@ COMMAND_SPECS: list[CommandSpec] = [
         short_option="-s",
         usage="<prompt>",
         help="Set the system prompt",
-        parse=lambda args: SetSysPromptCommand(sys_prompt=args.strip()),
+        parse=lambda args: SetSysPromptCommand(
+            sys_prompt=(args.strip() if args != "" else None)
+        ),
         argparse_kwargs=dict(default=None, metavar="PROMPT"),
         precedence=20,
     ),

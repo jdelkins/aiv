@@ -69,17 +69,17 @@ class NoOpCommand:
 
 @dataclass
 class SetModelCommand:
-    model: str
+    model: str | None
 
 
 @dataclass
 class SetMaxTokensCommand:
-    max_tokens: int
+    max_tokens: int | None
 
 
 @dataclass
 class SetSysPromptCommand:
-    sys_prompt: str
+    sys_prompt: str | None
 
 
 @dataclass

@@ -9,22 +9,24 @@ from aiv.specs import COMMAND_SPECS, COMMAND_LOOKUP
 _ALL_NAMES: list[str] = [name for spec in COMMAND_SPECS for name in spec.names]
 
 # Prefixes that should trigger path completion, e.g. "!context "
-# Built from specs with takes_path=True so it stays in sync automatically.
 _PATH_PREFIXES: list[str] = [
-    name + " "
-    for spec in COMMAND_SPECS
-    if spec.takes_path
-    for name in spec.names
+    name + " " for spec in COMMAND_SPECS if spec.takes_path for name in spec.names
 ]
 
-# Commands that accept an optional range argument — offer digit completion hint.
-# Not full completion (ranges are dynamic) but we can at least not offer names.
+# Commands that accept an optional range argument — once past command+space,
+# yield nothing rather than polluting with unrelated name completions.
 _RANGE_PREFIXES: list[str] = [
     name + " "
     for spec in COMMAND_SPECS
     if any(token in spec.usage for token in ("<range>", "[range]"))
     for name in spec.names
 ]
+
+# Mode values are derived from InteractionMode rather than hardcoded so that
+# adding a new mode in the future automatically appears in completion.
+from aiv.models import InteractionMode
+
+_MODE_VALUES: list[str] = [m.value for m in InteractionMode] + ["default"]
 
 
 class AivCompleter(Completer):
@@ -39,27 +41,23 @@ class AivCompleter(Completer):
         if "\n" in text:
             return
 
-        # Path completion for commands that take a filesystem argument (e.g. !context)
+        # Path completion for commands that take a filesystem argument
         for prefix in _PATH_PREFIXES:
             if text.startswith(prefix):
-                remainder = text[len(prefix):]
+                remainder = text[len(prefix) :]
                 sub_doc = Document(remainder, cursor_position=len(remainder))
-                # PathCompleter yields Completions with negative start_positions
-                # relative to the sub-document; they transfer correctly as-is.
                 yield from self._path_completer.get_completions(sub_doc, complete_event)
                 return
 
-        # Range-taking commands: no useful completions to offer beyond the command
-        # name itself, so once we're past the command+space, yield nothing rather
-        # than polluting with unrelated name completions.
+        # Range-taking commands: no useful completions beyond the command name
         for prefix in _RANGE_PREFIXES:
             if text.startswith(prefix):
                 return
 
-        # Mode argument completion for !mode
+        # Mode argument completion for !mode — derived from InteractionMode enum
         if text.startswith("!mode "):
-            remainder = text[len("!mode "):]
-            for value in ("chat", "code", "default"):
+            remainder = text[len("!mode ") :]
+            for value in _MODE_VALUES:
                 if value.startswith(remainder):
                     yield Completion(value, start_position=-len(remainder))
             return

@@ -3,7 +3,12 @@
 import sys
 import argparse
 
-from aiv.common import get_version, load_config
+from aiv.config import load_config, get_version
+from aiv.conversation import (
+    get_conversation_file,
+    load_conversation,
+    validate_conversation,
+)
 from aiv.models import PipelineContext, InteractionMode
 from aiv.specs import COMMAND_SPECS, OPTION_LOOKUP
 from aiv.commands import commands_from_args, run_pipeline, cmd_help
@@ -16,7 +21,6 @@ def build_parser() -> argparse.ArgumentParser:
         add_help=False,
     )
 
-    # Register all CLI-exposed commands from the registry
     for spec in COMMAND_SPECS:
         if not spec.long_option or not spec.argparse_kwargs:
             continue
@@ -26,9 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest = spec.long_option.lstrip("-").replace("-", "_")
         parser.add_argument(*flags, dest=dest, **spec.argparse_kwargs)
 
-    # --version is not a Command (no pipeline action, just print and exit)
     parser.add_argument("--version", "-v", dest="version", action="store_true")
-
     parser.add_argument("prompt", nargs="*")
     return parser
 
@@ -46,10 +48,8 @@ def print_cli_help():
         if spec.short_option:
             flags = f"{spec.short_option}, {flags}"
         arg_hint = f" {spec.usage.upper()}" if spec.usage else ""
-        # left-align the flags+hint column at 36 chars
         col = f"  {flags}{arg_hint}"
         lines.append(f"{col:<38} {spec.help}")
-    # --version is outside the registry
     lines.append(f"  {'--version, -v':<36} Display version information")
     print("\n".join(lines), file=sys.stderr)
 
@@ -66,10 +66,6 @@ def main():
         print(f"aiv {get_version()}", file=sys.stderr)
         sys.exit(0)
 
-    # Mutual exclusion: --chat and --code map to the same ctx.mode field;
-    # both being set is user error. Checked here rather than in argparse
-    # (add_mutually_exclusive_group) so the registry-driven add_argument loop
-    # stays simple and unconditional.
     if getattr(args, "chat", False) and getattr(args, "code", False):
         print("aiv: --chat and --code are mutually exclusive", file=sys.stderr)
         sys.exit(1)
@@ -89,6 +85,17 @@ def main():
     if not max_tokens_raw.isdigit():
         print("aiv: max_tokens must be a positive integer", file=sys.stderr)
         sys.exit(1)
+
+    # ---------------------------------------------------------------------------
+    # Conversation path: resolved once here and stored in ctx so every command
+    # in the pipeline uses the same file without re-resolving.
+    # ---------------------------------------------------------------------------
+    conv_path = get_conversation_file()
+
+    # Validate the existing conversation before the pipeline runs so we never
+    # silently corrupt or misread a user's file.
+    existing_messages = load_conversation(conv_path)
+    validate_conversation(existing_messages, conv_path)
 
     # ---------------------------------------------------------------------------
     # Stdin handling — must be done before building PipelineContext so that
@@ -118,9 +125,6 @@ def main():
             else:
                 stdin_data = raw
 
-    # Determine initial mode from CLI flags; SetModeCommand(s) in the pipeline
-    # will override this if --chat or --code were passed, but we also set it here
-    # so PipelineContext starts in the right state for any pre-prompt commands.
     initial_mode: InteractionMode | None = None
     if getattr(args, "chat", False):
         initial_mode = InteractionMode.CHAT
@@ -135,6 +139,7 @@ def main():
         max_tokens=int(max_tokens_raw),
         stdin_data=stdin_data,
         piped_stdin=not stdin_is_tty,
+        conv_path=conv_path,
     )
 
     run_pipeline(commands_from_args(args), ctx)

@@ -28,6 +28,7 @@
                 anthropic
                 prompt-toolkit
                 rich
+                pytest
               ]
             ))
           ];

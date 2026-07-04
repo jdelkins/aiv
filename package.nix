@@ -28,11 +28,20 @@ python3Packages.buildPythonApplication {
   # glow is a Go binary, not a Python package
   nativeBuildInputs = [ glow ];
 
+  nativeCheckInputs = with python3Packages; [ pytest ];
+
+  doCheck = true;
+
+  checkPhase = ''
+    runHook preCheck
+    pytest tests/
+    runHook postCheck
+  '';
+
   meta = {
     description = "AI Valve: Pipes for AI";
     license = lib.licenses.mit;
     maintainers = [ ];
-    # aiv is the primary entry point; aiv-repl is also installed
     mainProgram = "aiv";
   };
 }

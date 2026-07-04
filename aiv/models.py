@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 
-from aiv.common import MODE_CHAT_SUFFIX, MODE_CODE_SUFFIX
+from aiv.config import MODE_CHAT_SUFFIX, MODE_CODE_SUFFIX
 
 
 class InteractionMode(Enum):
@@ -117,8 +118,15 @@ class PipelineContext:
     stdin_data: str | None = None
     api_key: str = ""
     max_tokens: int = 4096
-    interactive: bool = False   # set True by run_repl_loop
-    piped_stdin: bool = False   # True if stdin was a pipe at invocation
+    interactive: bool = False  # set True by run_repl_loop
+    piped_stdin: bool = False  # True if stdin was a pipe at invocation
+    glow_available: bool = True  # set False on first FileNotFoundError from glow
+    # conv_path has no safe scalar default — it must be resolved at startup
+    # via conversation.get_conversation_file() and passed explicitly.
+    # Using field(default_factory=...) would silently re-resolve on every
+    # instantiation (e.g. in tests), so we require it as a keyword argument.
+    # Callers: cli.py main(), repl.py run_cli() (being removed), and tests.
+    conv_path: Path = field(default_factory=lambda: Path(".aiv-conversation.json"))
 
     @property
     def mode_suffix(self) -> str:
@@ -126,5 +134,10 @@ class PipelineContext:
             return MODE_CODE_SUFFIX
         elif self.mode == InteractionMode.CHAT:
             return MODE_CHAT_SUFFIX
-        # None: no suffix; plain output, appropriate for piped/non-interactive use
         return ""
+
+    def consume_stdin(self) -> str | None:
+        """Return stdin_data and clear it so it is only consumed once."""
+        data = self.stdin_data
+        self.stdin_data = None
+        return data

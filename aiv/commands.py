@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import glob
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 from anthropic.types import MessageParam
 
-from aiv.common import (
+from aiv.conversation import (
     get_conversation_file,
     load_conversation,
     save_conversation,
@@ -21,9 +22,10 @@ from aiv.common import (
     first_line,
     format_bytes,
     parse_range,
-    build_user_content,
-    run_turn,
+    strip_context_blocks,
 )
+from aiv.content import build_user_content
+from aiv.api import run_turn
 from aiv.models import (
     InteractionMode,
     Command,
@@ -76,14 +78,25 @@ def looks_like_markdown(text: str) -> bool:
     return False
 
 
-def render_output(text: str, ctx: PipelineContext):
-    """Canonical output renderer: glow for markdown, raw print for code mode or plain text."""
-    import subprocess
-
+def render_output(text: str, ctx: PipelineContext) -> None:
+    """
+    Canonical output renderer: glow for markdown, raw print for code mode or
+    plain text. Falls back to print if glow is not installed, warning once per
+    session via ctx.glow_available.
+    """
     if ctx.mode != InteractionMode.CODE and looks_like_markdown(text):
-        subprocess.run(["glow", "-"], input=text, text=True)
-    else:
-        print(text)
+        if ctx.glow_available:
+            try:
+                subprocess.run(["glow", "-"], input=text, text=True)
+                return
+            except FileNotFoundError:
+                ctx.glow_available = False
+                print(
+                    "aiv: warning: glow not found, falling back to plain output. "
+                    "Install glow for markdown rendering: https://github.com/charmbracelet/glow",
+                    file=sys.stderr,
+                )
+    print(text)
 
 
 # ---------------------------------------------------------------------------
@@ -123,9 +136,8 @@ def print_history_table(interactions: list[list[MessageParam]], start: int, end:
 # ---------------------------------------------------------------------------
 
 
-def cmd_history(cmd: HistoryCommand):
-    conv_path = get_conversation_file()
-    messages = load_conversation(conv_path)
+def cmd_history(cmd: HistoryCommand, ctx: PipelineContext):
+    messages = load_conversation(ctx.conv_path)
     interactions = build_interactions(messages)
 
     if not interactions:
@@ -159,8 +171,7 @@ def cmd_show(cmd: ShowCommand, ctx: PipelineContext):
             filtered_parts.append(p)
     parts = filtered_parts
 
-    conv_path = get_conversation_file()
-    messages = load_conversation(conv_path)
+    messages = load_conversation(ctx.conv_path)
     interactions = build_interactions(messages)
 
     range_tuple = parse_range(parts[0], len(interactions))
@@ -194,8 +205,7 @@ def cmd_show(cmd: ShowCommand, ctx: PipelineContext):
 
 
 def cmd_delete(cmd: DeleteCommand, ctx: PipelineContext):
-    conv_path = get_conversation_file()
-    messages = load_conversation(conv_path)
+    messages = load_conversation(ctx.conv_path)
     interactions = build_interactions(messages)
 
     if not interactions:
@@ -222,7 +232,7 @@ def cmd_delete(cmd: DeleteCommand, ctx: PipelineContext):
 
     if not should_confirm:
         new_interactions = interactions[: start - 1] + interactions[end:]
-        save_conversation(flatten_interactions(new_interactions), conv_path)
+        save_conversation(flatten_interactions(new_interactions), ctx.conv_path)
         return
 
     console.print(
@@ -243,13 +253,12 @@ def cmd_delete(cmd: DeleteCommand, ctx: PipelineContext):
         return
 
     new_interactions = interactions[: start - 1] + interactions[end:]
-    save_conversation(flatten_interactions(new_interactions), conv_path)
+    save_conversation(flatten_interactions(new_interactions), ctx.conv_path)
     console.print(f"[green]Deleted interactions {start}-{end}.[/green]")
 
 
 def cmd_reset(ctx: PipelineContext):
-    conv_path = get_conversation_file()
-    messages = load_conversation(conv_path)
+    messages = load_conversation(ctx.conv_path)
     interactions = build_interactions(messages)
     should_confirm = ctx.interactive or not ctx.piped_stdin
 
@@ -259,7 +268,7 @@ def cmd_reset(ctx: PipelineContext):
         return
 
     if not should_confirm:
-        reset_conversation(conv_path)
+        reset_conversation(ctx.conv_path)
         return
 
     console.print(
@@ -279,33 +288,31 @@ def cmd_reset(ctx: PipelineContext):
         console.print("[yellow]Cancelled.[/yellow]")
         return
 
-    reset_conversation(conv_path)
+    reset_conversation(ctx.conv_path)
     console.print("[green]Conversation reset.[/green]")
 
 
 def cmd_context(cmd: ContextCommand, ctx: PipelineContext):
     if cmd.path == "-":
-        data = ctx.stdin_data or ""
-        ctx.stdin_data = None  # consume
+        data = ctx.consume_stdin()
         if not data:
             console.print("[yellow]No stdin data to add as context.[/yellow]")
             return
-        append_user_turn(build_user_content("", [], data))
+        append_user_turn(build_user_content("", [], data), ctx.conv_path)
         console.print("[green]Added stdin as context.[/green]")
     else:
         matches = glob.glob(cmd.path, recursive=True)
         if not matches:
             console.print(f"[red]No files matched: {cmd.path}[/red]")
             return
-        append_user_turn(build_user_content("", [cmd.path], None))
+        append_user_turn(build_user_content("", [cmd.path], None), ctx.conv_path)
         console.print(
             f"[green]Added context: {cmd.path} ({len(matches)} file(s))[/green]"
         )
 
 
 def cmd_prompt(cmd: PromptCommand, ctx: PipelineContext):
-    stdin_data = ctx.stdin_data or None
-    ctx.stdin_data = None  # consume
+    stdin_data = ctx.consume_stdin()
 
     try:
         response_text = run_turn(
@@ -317,6 +324,7 @@ def cmd_prompt(cmd: PromptCommand, ctx: PipelineContext):
             model=ctx.model,
             max_tokens=ctx.max_tokens,
             sys_prompt=ctx.sys_prompt,
+            conv_path=ctx.conv_path,
         )
     except Exception as e:
         print(f"aiv: {e}", file=sys.stderr)
@@ -424,10 +432,14 @@ def commands_from_args(args) -> list[Command]:
                 sub_args = item if isinstance(item, str) else ""
                 pending.append((spec.precedence, spec.parse(sub_args)))
         elif val is True:
-            # store_true / store_const flags
+            # store_true flags
             pending.append((spec.precedence, spec.parse("")))
         else:
-            pending.append((spec.precedence, spec.parse(str(val))))
+            # nargs="?" with const=True: val may be True (flag with no argument)
+            # or a string (flag with argument). True means no argument was given,
+            # so pass "" rather than str(True) which would be treated as a range.
+            str_val = "" if val is True else str(val)
+            pending.append((spec.precedence, spec.parse(str_val)))
 
     # Inject positional prompt at its declared precedence
     prompt_text = " ".join(args.prompt) if getattr(args, "prompt", None) else ""
@@ -455,7 +467,7 @@ def run_command(cmd: Command, ctx: PipelineContext) -> None:
     elif isinstance(cmd, PromptCommand):
         cmd_prompt(cmd, ctx)
     elif isinstance(cmd, HistoryCommand):
-        cmd_history(cmd)
+        cmd_history(cmd, ctx)
     elif isinstance(cmd, ShowCommand):
         cmd_show(cmd, ctx)
     elif isinstance(cmd, DeleteCommand):

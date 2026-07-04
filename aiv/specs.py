@@ -27,10 +27,8 @@ from aiv.models import (
 class CommandSpec:
     names: tuple[str, ...]  # REPL dispatch keys; empty tuple = CLI-only
     help: str  # one-line description shared by !help and --help
-    parse: Callable[
-        [str], Command
-    ]  # args string -> Command (args="" for flag-only commands)
-    usage: str = ""  # args fragment only, e.g. "[range]" — not including command name
+    parse: Callable[[str], Command]  # args string -> Command (args="" for flag-only)
+    usage: str = ""  # args fragment only, e.g. "[range]" — not including name
     long_option: str | None = None  # CLI long flag e.g. "--history"; None = REPL-only
     short_option: str | None = None  # CLI short flag e.g. "-H"; None = no short flag
     argparse_kwargs: dict = field(
@@ -79,8 +77,6 @@ COMMAND_SPECS: list[CommandSpec] = [
         short_option=None,
         usage="<n>",
         help="Set max output tokens",
-        # int() may raise ValueError; cli.py validates before building commands,
-        # but REPL parse should be tolerant — handled in run_command via SetMaxTokensCommand
         parse=lambda args: SetMaxTokensCommand(max_tokens=int(args.strip())),
         argparse_kwargs=dict(default=None, metavar="N"),
         precedence=20,
@@ -148,7 +144,7 @@ COMMAND_SPECS: list[CommandSpec] = [
     # long_option (positional args, not a flag). It lives here so commands_from_args
     # can look up its precedence and emit it into the sorted pipeline correctly.
     CommandSpec(
-        names=(),  # bare text in REPL; not dispatched via _COMMAND_LOOKUP
+        names=(),  # bare text in REPL; not dispatched via COMMAND_LOOKUP
         long_option=None,  # positional, not a flag; handled specially in commands_from_args
         short_option=None,
         usage="<prompt>",

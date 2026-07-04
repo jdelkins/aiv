@@ -111,7 +111,10 @@ def main():
     # ---------------------------------------------------------------------------
     stdin_is_tty = sys.stdin.isatty()
     context_files = getattr(args, "context", []) or []
-    has_explicit_stdin_context = "-" in context_files
+    has_explicit_stdin_context = any(
+        c == "-" or c.startswith("-,") or c == "stdin" or c.startswith("stdin,")
+        for c in context_files
+    )
     stdin_data: str | None = None
 
     if not stdin_is_tty:

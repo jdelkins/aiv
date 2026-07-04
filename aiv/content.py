@@ -80,6 +80,8 @@ def build_user_content(
     context_files: list[str],
     stdin_data: str | None,
     mode_suffix: str = "",
+    stdin_ctx_file: str | None = None,
+    stdin_ctx_range: str | None = None,
 ) -> str:
     """
     Build the user message content string from prompt, context files, and
@@ -89,6 +91,9 @@ def build_user_content(
     (stdin is passed explicitly via stdin_data). File blocks use the
     ---CONTEXT_FILE:[path]--- / ---END--- envelope; stdin uses
     ---CONTEXT_TXT:[location_hint]--- / ---END---.
+
+    If stdin_ctx_file is provided the grep-based find_file_location() is
+    skipped entirely and the supplied file/range are used to build the hint.
     """
     parts = []
 
@@ -103,7 +108,14 @@ def build_user_content(
             parts.append("---END---")
 
     if stdin_data is not None:
-        loc = find_file_location(stdin_data)
+        # loc = find_file_location(stdin_data)
+        if stdin_ctx_file is not None:
+            if stdin_ctx_range is not None:
+                loc = f"[{stdin_ctx_file}:{stdin_ctx_range}]"
+            else:
+                loc = f"[{stdin_ctx_file}]"
+        else:
+            loc = find_file_location(stdin_data)
         parts.append(f"---CONTEXT_TXT:{loc}---")
         parts.append(stdin_data)
         parts.append("---END---")

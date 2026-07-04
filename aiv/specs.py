@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Callable
 
 from aiv.models import (
@@ -21,6 +22,48 @@ from aiv.models import (
     SetSysPromptCommand,
     SetModeCommand,
 )
+
+
+def _parse_context_arg(args: str) -> ContextCommand:
+    """
+    Parse a context argument which may be:
+      - a plain glob pattern:                  "src/**/*.py"
+      - stdin with no metadata:                "-" or "stdin"
+      - stdin with optional metadata:          "stdin,file=foo.py,range=45:67"
+      - stdin with metadata via = quoting:     "-,file=foo.py,range=45:67"
+                                               (only reachable as -c=-,file=...)
+
+    Keys are case-insensitive; order is irrelevant; unknown keys are ignored.
+    range= should be "START:END" (1-indexed inclusive).
+    """
+    args = args.strip()
+    is_stdin = (
+        args == "-"
+        or args == "stdin"
+        or args.startswith("stdin,")
+        or args.startswith("-,")
+    )
+    if not is_stdin:
+        return ContextCommand(path=args)
+
+    # Normalise to a remainder of ",key=val,..." or ""
+    if args.startswith("stdin"):
+        remainder = args[len("stdin") :]
+    elif args.startswith("-,"):
+        remainder = args[1:]  # strip "-", keep ",key=val,..."
+    else:
+        remainder = ""
+
+    meta: dict[str, str] = {}
+    for part in remainder.split(","):
+        if "=" in part:
+            k, _, v = part.partition("=")
+            meta[k.strip().lower()] = v.strip()
+
+    ctx_file = meta.get("file") or None
+    ctx_range = meta.get("range") or None
+
+    return ContextCommand(path="-", ctx_file=ctx_file, ctx_range=ctx_range)
 
 
 @dataclass(frozen=True)
@@ -137,9 +180,9 @@ COMMAND_SPECS: list[CommandSpec] = [
         names=("!context",),
         long_option="--context",
         short_option="-c",
-        usage="<file_pattern|->",
-        help="Add context from files (glob pattern) or stdin (-)",
-        parse=lambda args: ContextCommand(path=args.strip()),
+        usage="<file_pattern|stdin[,file=PATH][,range=L:L]>",
+        help="Add context from files (glob pattern) or stdin; use 'stdin,file=PATH,range=L:L' for metadata",
+        parse=_parse_context_arg,
         argparse_kwargs=dict(action="append", default=[], metavar="file_pattern"),
         takes_path=True,
         precedence=30,

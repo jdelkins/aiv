@@ -298,7 +298,16 @@ def cmd_context(cmd: ContextCommand, ctx: PipelineContext):
         if not data:
             console.print("[yellow]No stdin data to add as context.[/yellow]")
             return
-        append_user_turn(build_user_content("", [], data), ctx.conv_path)
+        append_user_turn(
+            build_user_content(
+                "",
+                [],
+                data,
+                stdin_ctx_file=cmd.ctx_file,
+                stdin_ctx_range=cmd.ctx_range,
+            ),
+            ctx.conv_path,
+        )
         console.print("[green]Added stdin as context.[/green]")
     else:
         matches = glob.glob(cmd.path, recursive=True)

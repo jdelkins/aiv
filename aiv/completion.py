@@ -45,6 +45,18 @@ class AivCompleter(Completer):
         for prefix in _PATH_PREFIXES:
             if text.startswith(prefix):
                 remainder = text[len(prefix) :]
+                # Skip path completion for stdin sentinels:
+                #   "stdin"        — bare stdin, no metadata
+                #   "stdin,..."    — stdin with file=/range= metadata
+                #   "-"            — legacy bare stdin sentinel
+                #   "-,"           — would be argparse-hostile but guard anyway
+                if (
+                    remainder == "-"
+                    or remainder.startswith("-,")
+                    or remainder == "stdin"
+                    or remainder.startswith("stdin,")
+                ):
+                    return
                 sub_doc = Document(remainder, cursor_position=len(remainder))
                 yield from self._path_completer.get_completions(sub_doc, complete_event)
                 return

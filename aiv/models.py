@@ -20,6 +20,8 @@ class InteractionMode(Enum):
 @dataclass
 class ContextCommand:
     path: str  # glob pattern or "-" for stdin
+    ctx_file: str | None = None  # use as location hint
+    ctx_range: str | None = None  # line range, e.g. "45:67"
 
 
 @dataclass

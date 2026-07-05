@@ -53,7 +53,12 @@ from aiv.specs import (
     CommandSpec,
 )
 
+# stdout console for primary output (history tables, show content, help)
 console = Console()
+
+# stderr console for all informational/status messages so they never pollute
+# piped stdout regardless of tty state
+info = Console(stderr=True)
 
 
 # ---------------------------------------------------------------------------
@@ -91,10 +96,9 @@ def render_output(text: str, ctx: PipelineContext) -> None:
                 return
             except FileNotFoundError:
                 ctx.glow_available = False
-                print(
+                info.print(
                     "aiv: warning: glow not found, falling back to plain output. "
-                    "Install glow for markdown rendering: https://github.com/charmbracelet/glow",
-                    file=sys.stderr,
+                    "Install glow for markdown rendering: https://github.com/charmbracelet/glow"
                 )
     print(text)
 
@@ -141,13 +145,13 @@ def cmd_history(cmd: HistoryCommand, ctx: PipelineContext):
     interactions = build_interactions(messages)
 
     if not interactions:
-        console.print("[yellow]No conversation history.[/yellow]")
+        info.print("[yellow]No conversation history.[/yellow]")
         return
 
     if cmd.range:
         parsed = parse_range(cmd.range, len(interactions))
         if parsed is None:
-            console.print(f"[red]Invalid range: {cmd.range}[/red]")
+            info.print(f"[red]Invalid range: {cmd.range}[/red]")
             return
         start, end = parsed
     else:
@@ -159,7 +163,7 @@ def cmd_history(cmd: HistoryCommand, ctx: PipelineContext):
 def cmd_show(cmd: ShowCommand, ctx: PipelineContext):
     parts = cmd.args.strip().split()
     if not parts:
-        console.print("[red]Usage: !show <num|range> [user|assistant] [--raw|-r][/red]")
+        info.print("[red]Usage: !show <num|range> [user|assistant] [--raw|-r][/red]")
         return
 
     raw_mode = False
@@ -176,13 +180,13 @@ def cmd_show(cmd: ShowCommand, ctx: PipelineContext):
 
     range_tuple = parse_range(parts[0], len(interactions))
     if range_tuple is None:
-        console.print(f"[red]Invalid number or range: {parts[0]}[/red]")
+        info.print(f"[red]Invalid number or range: {parts[0]}[/red]")
         return
     start, end = range_tuple
 
     role_filter = parts[1].lower() if len(parts) > 1 else None
     if role_filter and role_filter not in ("user", "assistant"):
-        console.print("[red]Role must be 'user' or 'assistant'[/red]")
+        info.print("[red]Role must be 'user' or 'assistant'[/red]")
         return
 
     for i in range(start - 1, end):
@@ -195,7 +199,8 @@ def cmd_show(cmd: ShowCommand, ctx: PipelineContext):
             content_str = content if isinstance(content, str) else str(content)
             role = msg["role"]
             role_style = "green" if role == "user" else "magenta"
-            console.print(
+            # headers go to stderr; content goes to stdout via render_output
+            info.print(
                 f"\n[bold {role_style}]--- {role} (interaction {num}) ---[/bold {role_style}]"
             )
             if raw_mode:
@@ -209,12 +214,12 @@ def cmd_delete(cmd: DeleteCommand, ctx: PipelineContext):
     interactions = build_interactions(messages)
 
     if not interactions:
-        console.print("[yellow]No conversation history.[/yellow]")
+        info.print("[yellow]No conversation history.[/yellow]")
         return
 
     range_tuple = parse_range(cmd.range.strip(), len(interactions))
     if range_tuple is None:
-        console.print(f"[red]Invalid range: {cmd.range}[/red]")
+        info.print(f"[red]Invalid range: {cmd.range}[/red]")
         return
 
     start, end = range_tuple
@@ -223,7 +228,7 @@ def cmd_delete(cmd: DeleteCommand, ctx: PipelineContext):
     if start == 1 and remaining_after:
         first_remaining = remaining_after[0][0]
         if first_remaining["role"] != "user":
-            console.print(
+            info.print(
                 "[bold red]Warning:[/bold red] This would leave the conversation "
                 "starting with an assistant turn, which is invalid for the Anthropic API."
             )
@@ -235,9 +240,7 @@ def cmd_delete(cmd: DeleteCommand, ctx: PipelineContext):
         save_conversation(flatten_interactions(new_interactions), ctx.conv_path)
         return
 
-    console.print(
-        f"\n[bold]Preview of interactions to be deleted ({start}-{end}):[/bold]"
-    )
+    info.print(f"\n[bold]Preview of interactions to be deleted ({start}-{end}):[/bold]")
     print_history_table(interactions, start, end)
 
     try:
@@ -245,16 +248,16 @@ def cmd_delete(cmd: DeleteCommand, ctx: PipelineContext):
             f"\n[bold red]Delete interactions {start}-{end}? (y/n):[/bold red] "
         )
     except (EOFError, KeyboardInterrupt):
-        console.print("\n[yellow]Cancelled.[/yellow]")
+        info.print("\n[yellow]Cancelled.[/yellow]")
         return
 
     if confirm.strip().lower() != "y":
-        console.print("[yellow]Cancelled.[/yellow]")
+        info.print("[yellow]Cancelled.[/yellow]")
         return
 
     new_interactions = interactions[: start - 1] + interactions[end:]
     save_conversation(flatten_interactions(new_interactions), ctx.conv_path)
-    console.print(f"[green]Deleted interactions {start}-{end}.[/green]")
+    info.print(f"[green]Deleted interactions {start}-{end}.[/green]")
 
 
 def cmd_reset(ctx: PipelineContext):
@@ -264,14 +267,14 @@ def cmd_reset(ctx: PipelineContext):
 
     if not interactions:
         if should_confirm:
-            console.print("[yellow]Conversation is already empty.[/yellow]")
+            info.print("[yellow]Conversation is already empty.[/yellow]")
         return
 
     if not should_confirm:
         reset_conversation(ctx.conv_path)
         return
 
-    console.print(
+    info.print(
         f"\n[bold]Current conversation ({len(interactions)} interaction(s)):[/bold]"
     )
     print_history_table(interactions, 1, len(interactions))
@@ -281,22 +284,22 @@ def cmd_reset(ctx: PipelineContext):
             "\n[bold red]Wipe entire conversation? (y/n):[/bold red] "
         )
     except (EOFError, KeyboardInterrupt):
-        console.print("\n[yellow]Cancelled.[/yellow]")
+        info.print("\n[yellow]Cancelled.[/yellow]")
         return
 
     if confirm.strip().lower() != "y":
-        console.print("[yellow]Cancelled.[/yellow]")
+        info.print("[yellow]Cancelled.[/yellow]")
         return
 
     reset_conversation(ctx.conv_path)
-    console.print("[green]Conversation reset.[/green]")
+    info.print("[green]Conversation reset.[/green]")
 
 
 def cmd_context(cmd: ContextCommand, ctx: PipelineContext):
     if cmd.path == "-":
         data = ctx.consume_stdin()
         if not data:
-            console.print("[yellow]No stdin data to add as context.[/yellow]")
+            info.print("[yellow]No stdin data to add as context.[/yellow]")
             return
         append_user_turn(
             build_user_content(
@@ -308,16 +311,14 @@ def cmd_context(cmd: ContextCommand, ctx: PipelineContext):
             ),
             ctx.conv_path,
         )
-        console.print("[green]Added stdin as context.[/green]")
+        info.print("[green]Added stdin as context.[/green]")
     else:
         matches = glob.glob(cmd.path, recursive=True)
         if not matches:
-            console.print(f"[red]No files matched: {cmd.path}[/red]")
+            info.print(f"[red]No files matched: {cmd.path}[/red]")
             return
         append_user_turn(build_user_content("", [cmd.path], None), ctx.conv_path)
-        console.print(
-            f"[green]Added context: {cmd.path} ({len(matches)} file(s))[/green]"
-        )
+        info.print(f"[green]Added context: {cmd.path} ({len(matches)} file(s))[/green]")
 
 
 def cmd_prompt(cmd: PromptCommand, ctx: PipelineContext):
@@ -336,7 +337,7 @@ def cmd_prompt(cmd: PromptCommand, ctx: PipelineContext):
             conv_path=ctx.conv_path,
         )
     except Exception as e:
-        print(f"aiv: {e}", file=sys.stderr)
+        info.print(f"[red]aiv: {e}[/red]")
         return
 
     render_output(response_text, ctx)
@@ -346,28 +347,28 @@ def cmd_set_model(cmd: SetModelCommand, ctx: PipelineContext):
     if cmd.model is not None:
         ctx.model = cmd.model
     if ctx.interactive:
-        console.print(f"[green]Model set to: {ctx.model}[/green]")
+        info.print(f"[green]Model set to: {ctx.model}[/green]")
 
 
 def cmd_set_max_tokens(cmd: SetMaxTokensCommand, ctx: PipelineContext):
     if cmd.max_tokens is not None:
         ctx.max_tokens = cmd.max_tokens
     if ctx.interactive:
-        console.print(f"[green]max_tokens set to: {ctx.max_tokens}[/green]")
+        info.print(f"[green]max_tokens set to: {ctx.max_tokens}[/green]")
 
 
 def cmd_set_sys_prompt(cmd: SetSysPromptCommand, ctx: PipelineContext):
     if cmd.sys_prompt is not None:
         ctx.sys_prompt = cmd.sys_prompt
     if ctx.interactive:
-        console.print(f"[green]sys_prompt set to: {ctx.sys_prompt}[/green]")
+        info.print(f"[green]sys_prompt set to: {ctx.sys_prompt}[/green]")
 
 
 def cmd_set_mode(cmd: SetModeCommand, ctx: PipelineContext):
     ctx.mode = cmd.mode
     if ctx.interactive:
         label = cmd.mode.value if cmd.mode is not None else "default"
-        console.print(f"[green]Mode set to: {label}[/green]")
+        info.print(f"[green]Mode set to: {label}[/green]")
 
 
 def cmd_help():
@@ -405,7 +406,7 @@ def parse_command(text: str) -> Command:
 
     spec = COMMAND_LOOKUP.get(name)
     if spec is None:
-        console.print(
+        info.print(
             f"[red]Unknown command: {name}. Type !help for available commands.[/red]"
         )
         return NoOpCommand()

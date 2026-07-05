@@ -365,10 +365,10 @@ def cmd_set_sys_prompt(cmd: SetSysPromptCommand, ctx: PipelineContext):
 
 
 def cmd_set_mode(cmd: SetModeCommand, ctx: PipelineContext):
-    ctx.mode = cmd.mode
+    if cmd.mode is not None:
+        ctx.mode = cmd.mode
     if ctx.interactive:
-        label = cmd.mode.value if cmd.mode is not None else "default"
-        info.print(f"[green]Mode set to: {label}[/green]")
+        info.print(f"[green]Mode set to: {ctx.mode.value}[/green]")
 
 
 def cmd_help():

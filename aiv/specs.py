@@ -171,9 +171,10 @@ COMMAND_SPECS: list[CommandSpec] = [
             mode={
                 "chat": InteractionMode.CHAT,
                 "code": InteractionMode.CODE,
+                "default": InteractionMode.DEFAULT,
             }.get(
                 args.strip().lower()
-            )  # unrecognised or empty -> None (default)
+            )  # unrecognised or empty -> None (display the mode)
         ),
         precedence=20,
     ),

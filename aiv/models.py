@@ -10,6 +10,7 @@ from aiv.config import MODE_CHAT_SUFFIX, MODE_CODE_SUFFIX
 class InteractionMode(Enum):
     CHAT = "chat"
     CODE = "code"
+    DEFAULT = "default"
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +117,7 @@ Command = (
 class PipelineContext:
     model: str = "claude-3-7-sonnet-latest"
     sys_prompt: str = ""
-    mode: InteractionMode | None = None
+    mode: InteractionMode = InteractionMode.DEFAULT
     stdin_data: str | None = None
     api_key: str = ""
     max_tokens: int = 4096

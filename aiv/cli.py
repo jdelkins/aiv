@@ -128,7 +128,7 @@ def main():
             else:
                 stdin_data = raw
 
-    initial_mode: InteractionMode | None = None
+    initial_mode: InteractionMode = InteractionMode.DEFAULT
     if getattr(args, "chat", False):
         initial_mode = InteractionMode.CHAT
     elif getattr(args, "code", False):

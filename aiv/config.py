@@ -7,6 +7,7 @@ FALLBACK_CONVERSATION_FILE = CONFIG_DIR / "conversation.json"
 MODE_CHAT_SUFFIX = "\n\nRespond using markdown formatting including triple backticks where it aids readability."
 MODE_CODE_SUFFIX = (
     "\n\nRespond with raw code only. No markdown, no triple backtick fences. "
+    "Preserve all leading whitespace exactly as it appears — do not strip indentation from any line, including the first. "
     "If you have important caveats or usage nuances, include them as code comments."
 )
 

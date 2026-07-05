@@ -72,6 +72,7 @@ class CommandSpec:
     help: str  # one-line description shared by !help and --help
     parse: Callable[[str], Command]  # args string -> Command (args="" for flag-only)
     usage: str = ""  # args fragment only, e.g. "[range]" — not including name
+    repl_usage: str | None = None  # overrides usage in REPL !help if set
     long_option: str | None = None  # CLI long flag e.g. "--history"; None = REPL-only
     short_option: str | None = None  # CLI short flag e.g. "-H"; None = no short flag
     argparse_kwargs: dict = field(
@@ -181,6 +182,7 @@ COMMAND_SPECS: list[CommandSpec] = [
         long_option="--context",
         short_option="-c",
         usage="<file_pattern|stdin[,file=PATH][,range=L:L]>",
+        repl_usage="<file_pattern>",
         help="Add context from files (glob pattern) or stdin; use 'stdin,file=PATH,range=L:L' for metadata",
         parse=_parse_context_arg,
         argparse_kwargs=dict(action="append", default=[], metavar="file_pattern"),

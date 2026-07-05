@@ -381,7 +381,8 @@ def cmd_help():
         if not spec.names:
             continue  # skip the bare-prompt pseudo-spec
         name = ", ".join(spec.names)
-        full_usage = f"{name} {spec.usage}".strip()
+        display_usage = spec.repl_usage if spec.repl_usage is not None else spec.usage
+        full_usage = f"{name} {display_usage}".strip()
         table.add_row(full_usage, spec.help)
     console.print(table)
     console.print(

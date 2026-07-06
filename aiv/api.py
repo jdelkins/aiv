@@ -33,6 +33,7 @@ def _call_api(
         max_tokens=max_tokens,
         messages=messages,
         system=sys_prompt,
+        cache_control={"type": "ephemeral"},
     ) as stream:
         response_text = ""
         for text in stream.text_stream:

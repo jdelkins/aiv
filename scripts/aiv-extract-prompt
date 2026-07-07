@@ -4,7 +4,16 @@ set -euo pipefail
 file="$1"
 firstline="$2"
 lastline="$3"
-input="$(cat)"
+
+# -d '' reads until EOF including all newlines; || true because read returns 1
+# on EOF. This preserves trailing newlines that command substitution would strip.
+IFS= read -r -d '' input < /dev/stdin || true
+
+if [[ "$input" == *$'\n' ]]; then
+  input_had_trailing_newline=true
+else
+  input_had_trailing_newline=false
+fi
 
 prompt="$(printf '%s' "$input" | sed -n 's/^\s*## prompt:\s*//p' | tr '\n' ' ' | sed 's/ $//')"
 body="$(printf '%s' "$input" | sed '/^\s*## prompt:/d')"
@@ -27,4 +36,9 @@ if [ -n "$rest_out" ]; then
   printf '%s\n%s' "$first_out_line" "$rest_out"
 else
   printf '%s' "$first_out_line"
+fi
+
+# Append trailing newline if the original input had one.
+if [ "$input_had_trailing_newline" = true ]; then
+  printf '\n'
 fi

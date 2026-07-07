@@ -434,9 +434,9 @@ echo ".aiv-conversation.json" >> ~/.gitignore_global
 ## Attribution
 
 This project was forked from https://github.com/o8vm/aiv, a shell script by
-o8vm, but has been completely rewritten in Python with a substantially different
-architecture and feature set. The core concept — Unix pipe-friendly AI interaction
-— is theirs; everything else has been rebuilt from scratch.
+Hayato Ohhashi, but has been completely rewritten in Python with a substantially
+different architecture and feature set. The core concept — Unix pipe-friendly AI
+interaction — is theirs; everything else has been rebuilt from scratch.
 
 Major differences from the original:
 

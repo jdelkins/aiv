@@ -62,7 +62,8 @@ def run_repl_loop(ctx: PipelineContext) -> None:
     )
 
     cmd_help()
-    cmd_set_mode(SetModeCommand(mode=InteractionMode.CHAT), ctx)
+    if ctx.mode == InteractionMode.DEFAULT:
+        cmd_set_mode(SetModeCommand(mode=InteractionMode.CHAT), ctx)
 
     while True:
         try:

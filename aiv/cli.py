@@ -3,7 +3,7 @@
 import sys
 import argparse
 
-from aiv.config import load_config, get_version
+from aiv.config import load_config
 from aiv.conversation import (
     get_conversation_file,
     load_conversation,
@@ -30,7 +30,6 @@ def build_parser() -> argparse.ArgumentParser:
         dest = spec.long_option.lstrip("-").replace("-", "_")
         parser.add_argument(*flags, dest=dest, **spec.argparse_kwargs)
 
-    parser.add_argument("--version", "-v", dest="version", action="store_true")
     parser.add_argument("prompt", nargs="*")
     return parser
 
@@ -50,7 +49,6 @@ def print_cli_help():
         arg_hint = f" {spec.usage.upper()}" if spec.usage else ""
         col = f"  {flags}{arg_hint}"
         lines.append(f"{col:<38} {spec.help}")
-    lines.append(f"  {'--version, -v':<36} Display version information")
     print("\n".join(lines), file=sys.stderr)
 
 
@@ -60,10 +58,6 @@ def main():
 
     if getattr(args, "help", False):
         print_cli_help()
-        sys.exit(0)
-
-    if getattr(args, "version", False):
-        print(f"aiv {get_version()}", file=sys.stderr)
         sys.exit(0)
 
     if getattr(args, "chat", False) and getattr(args, "code", False):

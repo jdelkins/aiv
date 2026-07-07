@@ -21,6 +21,7 @@ from aiv.models import (
     SetMaxTokensCommand,
     SetSysPromptCommand,
     SetModeCommand,
+    ShowVersionCommand,
 )
 
 
@@ -238,6 +239,16 @@ COMMAND_SPECS: list[CommandSpec] = [
         usage="",
         help="Show this help",
         parse=lambda _args: HelpCommand(),
+        argparse_kwargs=dict(action="store_true"),
+        precedence=50,
+    ),
+    CommandSpec(
+        names=("!version",),
+        long_option="--version",
+        short_option="-v",
+        usage="",
+        help="Display version information",
+        parse=lambda _args: ShowVersionCommand(),
         argparse_kwargs=dict(action="store_true"),
         precedence=50,
     ),

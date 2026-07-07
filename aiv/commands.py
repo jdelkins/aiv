@@ -1,4 +1,5 @@
 from __future__ import annotations
+from aiv.config import get_version
 
 import glob
 import re
@@ -44,6 +45,7 @@ from aiv.models import (
     SetSysPromptCommand,
     SetModeCommand,
     PipelineContext,
+    ShowVersionCommand,
 )
 from aiv.specs import (
     COMMAND_SPECS,
@@ -391,6 +393,10 @@ def cmd_help():
     )
 
 
+def cmd_version():
+    console.print(f"aiv {get_version()}\n")
+
+
 # ---------------------------------------------------------------------------
 # parse_command: text -> Command
 # ---------------------------------------------------------------------------
@@ -503,6 +509,8 @@ def run_command(cmd: Command, ctx: PipelineContext) -> None:
         from aiv.repl import run_repl_loop
 
         run_repl_loop(ctx)
+    elif isinstance(cmd, ShowVersionCommand):
+        cmd_version()
     elif isinstance(cmd, ExitCommand):
         raise QuitPipeline()
     elif isinstance(cmd, NoOpCommand):

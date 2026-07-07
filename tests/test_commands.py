@@ -16,6 +16,7 @@ from aiv.models import (
     SetModeCommand,
     ResetCommand,
     ReplCommand,
+    ShowVersionCommand,
 )
 from aiv.commands import commands_from_args, render_output
 
@@ -70,6 +71,12 @@ class TestCommandsFromArgs:
     def test_no_args_produces_empty_pipeline(self):
         args = make_args()
         assert commands_from_args(args) == []
+
+    def test_version_flag(self):
+        args = make_args(version=True)
+        cmds = commands_from_args(args)
+        assert len(cmds) == 1
+        assert isinstance(cmds[0], ShowVersionCommand)
 
     def test_prompt_only(self):
         args = make_args(prompt=["hello", "world"])

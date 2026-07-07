@@ -61,6 +61,11 @@ class ReplCommand:
 
 
 @dataclass
+class ShowVersionCommand:
+    pass
+
+
+@dataclass
 class ExitCommand:
     pass
 
@@ -105,6 +110,7 @@ Command = (
     | SetMaxTokensCommand
     | SetSysPromptCommand
     | SetModeCommand
+    | ShowVersionCommand
 )
 
 

@@ -33,9 +33,10 @@ def tmp_conv_path(tmp_path) -> Path:
 
 @pytest.fixture
 def ctx(tmp_conv_path) -> PipelineContext:
+    # Pass conv_path_override so tests never trigger the lazy git subprocess
     return PipelineContext(
         api_key="test",
-        conv_path=tmp_conv_path,
+        conv_path_override=tmp_conv_path,
     )
 
 
@@ -68,9 +69,11 @@ def make_args(**kwargs) -> argparse.Namespace:
 
 
 class TestCommandsFromArgs:
-    def test_no_args_produces_empty_pipeline(self):
+    def test_no_args_produces_repl(self):
         args = make_args()
-        assert commands_from_args(args) == []
+        cmds = commands_from_args(args)
+        assert len(cmds) == 1
+        assert isinstance(cmds[0], ReplCommand)
 
     def test_version_flag(self):
         args = make_args(version=True)

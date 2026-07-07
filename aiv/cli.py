@@ -4,11 +4,6 @@ import sys
 import argparse
 
 from aiv.config import load_config
-from aiv.conversation import (
-    get_conversation_file,
-    load_conversation,
-    validate_conversation,
-)
 from aiv.models import PipelineContext, InteractionMode
 from aiv.specs import COMMAND_SPECS, OPTION_LOOKUP
 from aiv.commands import commands_from_args, run_pipeline, cmd_help
@@ -81,17 +76,6 @@ def main():
         sys.exit(1)
 
     # ---------------------------------------------------------------------------
-    # Conversation path: resolved once here and stored in ctx so every command
-    # in the pipeline uses the same file without re-resolving.
-    # ---------------------------------------------------------------------------
-    conv_path = get_conversation_file()
-
-    # Validate the existing conversation before the pipeline runs so we never
-    # silently corrupt or misread a user's file.
-    existing_messages = load_conversation(conv_path)
-    validate_conversation(existing_messages, conv_path)
-
-    # ---------------------------------------------------------------------------
     # Stdin handling — must be done before building PipelineContext so that
     # ctx.stdin_data is set correctly before commands_from_args runs.
     #
@@ -136,7 +120,8 @@ def main():
         max_tokens=int(max_tokens_raw),
         stdin_data=stdin_data,
         piped_stdin=not stdin_is_tty,
-        conv_path=conv_path,
+        # conv_path resolved lazily on first access — commands that don't need
+        # the conversation file (--version, --help, --repl) pay no I/O cost.
     )
 
     run_pipeline(commands_from_args(args), ctx)

@@ -130,12 +130,28 @@ class PipelineContext:
     interactive: bool = False  # set True by run_repl_loop
     piped_stdin: bool = False  # True if stdin was a pipe at invocation
     glow_available: bool = True  # set False on first FileNotFoundError from glow
-    # conv_path has no safe scalar default — it must be resolved at startup
-    # via conversation.get_conversation_file() and passed explicitly.
-    # Using field(default_factory=...) would silently re-resolve on every
-    # instantiation (e.g. in tests), so we require it as a keyword argument.
-    # Callers: cli.py main(), repl.py run_cli() (being removed), and tests.
-    conv_path: Path = field(default_factory=lambda: Path(".aiv-conversation.json"))
+    # conv_path_override: pass an explicit Path (e.g. in tests) to skip auto-resolution.
+    # Leave as None in production — get_conversation_file() is called lazily on first
+    # access to ctx.conv_path, along with load_conversation + validate_conversation.
+    conv_path_override: Path | None = None
+
+    def __post_init__(self):
+        self._conv_path: Path | None = None
+
+    @property
+    def conv_path(self) -> Path:
+        if self._conv_path is None:
+            from aiv.conversation import (
+                get_conversation_file,
+                load_conversation,
+                validate_conversation,
+            )
+
+            path = self.conv_path_override or get_conversation_file()
+            messages = load_conversation(path)
+            validate_conversation(messages, path)
+            self._conv_path = path
+        return self._conv_path
 
     @property
     def mode_suffix(self) -> str:

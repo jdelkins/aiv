@@ -1,4 +1,7 @@
 from __future__ import annotations
+import subprocess
+from typing import Literal, cast
+
 
 import json
 import sys
@@ -96,6 +99,28 @@ def count_context_blocks(content: str) -> int:
 # ---------------------------------------------------------------------------
 
 
+# Sentinel: False = not yet checked, None = checked but not in a repo
+
+
+_git_root: Path | None | Literal[False] = False
+
+
+def _resolve_git_root() -> Path | None:
+    global _git_root
+    if _git_root is not False:
+        return _git_root
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+        )
+        _git_root = Path(result.stdout.strip()) if result.returncode == 0 else None
+    except Exception:
+        _git_root = None
+    return _git_root
+
+
 def get_conversation_file() -> Path:
     """
     Resolve the default conversation file path.
@@ -103,21 +128,15 @@ def get_conversation_file() -> Path:
     falls back to ~/.config/aiv/conversation.json.
     Callers that have a PipelineContext should use ctx.conv_path instead of
     calling this directly — this is used during startup before ctx exists.
+    The git subprocess result is cached in _git_root so repeated calls
+    (e.g. from content.py) pay the cost at most once per process.
     """
-    from aiv.config import CONFIG_DIR
-    import subprocess
-
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            return Path(result.stdout.strip()) / ".aiv-conversation.json"
-    except Exception:
-        pass
-    return FALLBACK_CONVERSATION_FILE
+    root = _resolve_git_root()
+    return (
+        root / ".aiv-conversation.json"
+        if root is not None
+        else FALLBACK_CONVERSATION_FILE
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -465,6 +465,9 @@ def commands_from_args(args) -> list[Command]:
     prompt_text = " ".join(args.prompt) if getattr(args, "prompt", None) else ""
     if prompt_text:
         pending.append((PROMPT_SPEC.precedence, PromptCommand(text=prompt_text)))
+    elif len(pending) == 0:
+        repl_command = OPTION_LOOKUP["--repl"]
+        pending.append((repl_command.precedence, ReplCommand()))
 
     # Stable sort: equal precedence preserves original input/registry order
     pending.sort(key=lambda t: t[0])

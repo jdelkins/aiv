@@ -66,26 +66,30 @@ nix profile install github:jdelkins/aiv
    mkdir -p ~/.config/aiv
    ```
 
-2. Configure your API settings in `~/.config/aiv/config`:
+2. Configure your API settings in `~/.config/aiv/config.toml`:
    ```
-   API_KEY="your_anthropic_api_key"
-   MODEL="claude-sonnet-4-20250514"
-   MAX_TOKENS=4096
-   SYS_PROMPT="You are an expert programmer and a shell master and an expert support engineer. You value code efficiency and clarity above all things. What you write will be piped in and out of CLI programs, so do not explain anything unless explicitly asked to. In conversational responses, you may use markdown formatting including triple backticks where it aids readability. When providing direct output intended for piping, avoid triple backticks and provide only the raw result. Preserve input formatting. If I say \"code only\" or similar, please provide only code responses, without wrapping them in markdown; however, in this case, if you have important information, caveats, or usage nuances, feel free to include that information in a code comment."
+   api_key = "your_anthropic_api_key"
+   model = "claude-sonnet-4-6"
+   max_tokens = 4096
    ```
 
-### About the SYS_PROMPT setting
+3. (Optional; not recommended) Configure `sys_prompt`, `mode_chat_suffix`, and
+   `mode_code_suffix`. Defaults are tested to work well with this type of
+   workflow, but they are configurable if further tweaking is desired.
 
-   The recommended system prompt above establishes a baseline personality and
-   output style for the AI: terse, pipe-friendly, and format-aware. By default the
-   model avoids unsolicited explanation and preserves input formatting, making it
-   safe to use in shell pipelines. `aiv` passes this prompt unchanged to the API
-   on every request. The `-C` and `-X` flags then layer per-request formatting
-   instructions directly onto the user prompt — `-C` nudges the model toward
-   markdown and readable formatting for conversational use, while `-X` instructs it
-   to emit raw code only with caveats as comments. This separation means the system
-   prompt sets a sensible default, and the mode flags override formatting behaviour
-   only for the turn they are applied to, without permanently altering the session.
+   - `sys_prompt` is used to set a baseline for the entire conversation. The
+      default establishes a baseline personality and output style for the
+      AI: terse, pipe-friendly, and format-aware. By default the model avoids
+      unsolicited explanation and preserves input formatting, making it safe to
+      use in shell pipelines. `aiv` passes this prompt unchanged to the API on
+      every request.
+
+   - `mode_chat_suffix` is used by the `-C` flag to layer per-request
+      formatting instructions directly onto the user prompt. It nudges the model
+      toward markdown and readable formatting for conversational use.
+
+   - `mode_code_suffix` is used similarly by the `-X` flag to emit raw code
+      only with caveats as comments.
 
 ## The `aiv` command
 
@@ -112,13 +116,17 @@ context, sends the prompt, and prints history, all in one command.
   Recommended when piping output back into an editor or shell pipeline.
 - `-i, --repl`: Launch the interactive REPL after processing any other options
   given on the command line (context, prompt, history, etc. all run first, in order,
-  then the REPL takes over the terminal for further turns).
+  then the REPL takes over the terminal for further turns). If no other flags or prompt
+  are provided on the command line, `-i` is assumed.
 - `-H, --history [range]`: Show conversation history and exit. Combine with `-i`
   to view history and then remain in the REPL. Accepts an optional range, e.g.
   `-H 3-7`.
 - `-S, --show [range]`: Show full content of one or more interactions and exit.
   Accepts an optional range, e.g. `-S 3-7`; defaults to the entire conversation
-  if no range is given. Combine with `-i` to remain in the REPL afterward.
+  if no range is given. Combine with `-i` to remain in the REPL afterward. You
+  may also show only the *user* or *assistant* side of the turn, and specify
+  raw mode if desired, like so: `-S "7 assistant -r"`. Here, raw mode means:
+  don't pipe the output through `glow`, even if the text looks like markdown.
 - `-m MODEL`: Use specified model
 - `-s [prompt]`: Override system prompt
 - `-h, -v`: Display help/version information
@@ -147,10 +155,15 @@ terminal (`/dev/tty`) for interactive input afterward.
 |---|---|
 | `!history [range]` | Show conversation history (e.g. `!history 3-7`) |
 | `!show <range> [role] [--raw\|-r]` | Show full content of one or more interactions (e.g. `!show 3-7`) |
+| `!sys-prompt [prompt]` | Show or set the system prompt |
+| `!chat` | Enter *chat* mode. This is the default mode in the repl. |
+| `!code` | Enter *code* mode. Equivalent to `aiv -X -i` |
+| `!mode [mode]` | Show or set the mode. use `default` or any value except `chat` or `code` to avoid adding any suffix to the user prompt. |
 | `!delete <range>` | Delete interactions with preview and confirmation |
 | `!reset` | Wipe the entire conversation with confirmation |
 | `!context <path>` | Add a file to context (equivalent to `aiv -c <path>`) |
 | `!help` | Show available commands |
+| `!version` | Show version information |
 | `!quit` / `!exit` | End the session |
 
 ## Examples
@@ -372,7 +385,7 @@ echo ".aiv-conversation.json" >> ~/.gitignore_global
 - **Conversation history (in repo)**: `.aiv-conversation.json` at repo root
 - **Conversation history (fallback)**: `~/.config/aiv/conversation.json`
 - **REPL input history**: `.aiv-history` at repo root (or `~/.config/aiv/.aiv-history`)
-- **Configuration**: `~/.config/aiv/config`
+- **Configuration**: `~/.config/aiv/config.toml`
 
 ## Differences from Shell Version
 

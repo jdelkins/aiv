@@ -3,7 +3,7 @@
 import sys
 import argparse
 
-from aiv.config import load_config
+from aiv.config import get_config
 from aiv.models import PipelineContext, InteractionMode
 from aiv.specs import COMMAND_SPECS, OPTION_LOOKUP
 from aiv.commands import commands_from_args, run_pipeline, cmd_help
@@ -60,7 +60,7 @@ def main():
         sys.exit(1)
 
     try:
-        config = load_config()
+        config = get_config()
     except FileNotFoundError as e:
         print(e, file=sys.stderr)
         sys.exit(1)
@@ -70,10 +70,7 @@ def main():
         print("aiv: api_key not set", file=sys.stderr)
         sys.exit(1)
 
-    max_tokens_raw = config.get("max_tokens", "4096")
-    if not max_tokens_raw.isdigit():
-        print("aiv: max_tokens must be a positive integer", file=sys.stderr)
-        sys.exit(1)
+    max_tokens = config.get("max_tokens", 4096)
 
     # ---------------------------------------------------------------------------
     # Stdin handling — must be done before building PipelineContext so that
@@ -117,7 +114,7 @@ def main():
         sys_prompt=config.get("sys_prompt", ""),
         mode=initial_mode,
         api_key=api_key,
-        max_tokens=int(max_tokens_raw),
+        max_tokens=int(max_tokens),
         stdin_data=stdin_data,
         piped_stdin=not stdin_is_tty,
         # conv_path resolved lazily on first access — commands that don't need

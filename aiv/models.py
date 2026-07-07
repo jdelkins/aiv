@@ -1,10 +1,11 @@
 from __future__ import annotations
+import sys
 
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-from aiv.config import MODE_CHAT_SUFFIX, MODE_CODE_SUFFIX
+from aiv.config import get_config
 
 
 class InteractionMode(Enum):
@@ -155,10 +156,16 @@ class PipelineContext:
 
     @property
     def mode_suffix(self) -> str:
+        try:
+            config = get_config()
+        except FileNotFoundError as e:
+            print(e, file=sys.stderr)
+            sys.exit(1)
+
         if self.mode == InteractionMode.CODE:
-            return MODE_CODE_SUFFIX
+            return config.get("mode_code_suffix", "")
         elif self.mode == InteractionMode.CHAT:
-            return MODE_CHAT_SUFFIX
+            return config.get("mode_chat_suffix", "")
         return ""
 
     def consume_stdin(self) -> str | None:

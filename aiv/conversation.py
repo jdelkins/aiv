@@ -1,4 +1,5 @@
 from __future__ import annotations
+from functools import lru_cache
 import subprocess
 from typing import Literal, cast
 
@@ -99,26 +100,17 @@ def count_context_blocks(content: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-# Sentinel: False = not yet checked, None = checked but not in a repo
-
-
-_git_root: Path | None | Literal[False] = False
-
-
+@lru_cache(maxsize=None)
 def _resolve_git_root() -> Path | None:
-    global _git_root
-    if _git_root is not False:
-        return _git_root
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
         )
-        _git_root = Path(result.stdout.strip()) if result.returncode == 0 else None
+        return Path(result.stdout.strip()) if result.returncode == 0 else None
     except Exception:
-        _git_root = None
-    return _git_root
+        return None
 
 
 def get_conversation_file() -> Path:

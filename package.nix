@@ -3,6 +3,8 @@
   python3Packages,
   glow,
   git,
+  bash,
+  makeWrapper,
 }:
 
 let
@@ -30,6 +32,7 @@ python3Packages.buildPythonApplication {
   nativeBuildInputs = [
     glow
     git
+    makeWrapper
   ];
 
   nativeCheckInputs = with python3Packages; [ pytest ];
@@ -40,6 +43,12 @@ python3Packages.buildPythonApplication {
     runHook preCheck
     pytest tests/
     runHook postCheck
+  '';
+
+ postInstall = ''
+    install -Dm755 scripts/aiv-extract-prompt $out/bin/aiv-extract-prompt
+    wrapProgram $out/bin/aiv-extract-prompt \
+      --prefix PATH : ${lib.makeBinPath [ bash glow git ]}:$out/bin
   '';
 
   meta = {

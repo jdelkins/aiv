@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+file="$1"
+firstline="$2"
+lastline="$3"
+input="$(cat)"
+
+prompt="$(printf '%s' "$input" | sed -n 's/^\s*## prompt:\s*//p' | tr '\n' ' ' | sed 's/ $//')"
+body="$(printf '%s' "$input" | sed '/^\s*## prompt:/d')"
+prompt_line_count="$(printf '%s' "$input" | grep -c '^\s*## prompt:')"
+adjusted_last="$((lastline - prompt_line_count))"
+
+printf '%s' "$body" | aiv -X -c "stdin,file=$file,range=$firstline:$adjusted_last" "$prompt" 2>/dev/null

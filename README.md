@@ -284,6 +284,46 @@ tool, use the `-X` flag to ensure responses are in code-ready format — no mark
 fences, no prose wrapping, just the raw output suitable for insertion into your
 buffer.
 
+The key bindings below use `Space+v` as the prefix. Add them to your
+`~/.config/helix/config.toml`:
+
+```toml
+[keys.normal.space.v]
+r = ":pipe aiv-extract-prompt '%{buffer_name}' '%{selection_line_start}' '%{selection_line_end}'"  # rewrite selection via inline ## prompt: comments
+c = ":pipe-to aiv -X -c 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"  # load selection as context, no output
+C = ":pipe-to aiv -X -R -c 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"  # load selection as context, resetting conversation
+R = ":run-shell-command echo '' | aiv -X -R"  # reset conversation
+f = ":run-shell-command aiv -X -c '%{buffer_name}'"  # load entire current buffer as context
+
+[keys.select.space.v]
+r = ":pipe aiv-extract-prompt '%{buffer_name}' '%{selection_line_start}' '%{selection_line_end}'"
+c = ":pipe-to aiv -X -c 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"
+C = ":pipe-to aiv -X -R -c 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"
+R = ":run-shell-command echo '' | aiv -X -R"
+f = ":run-shell-command aiv -X -c '%{buffer_name}'"
+
+[keys.insert]
+A-p = [":insert-output printf '## prompt: '", "move_char_right"]  # insert prompt prefix for use with the rewrite binding
+```
+
+The `aiv-extract-prompt` helper script (used by the `r` binding) reads
+`## prompt: <text>` comment lines from the selected region, strips them from
+the content, and passes the remaining code as context with the extracted text
+as the prompt. This lets you annotate code directly with instructions and
+invoke a rewrite in place. The script is included in the repository as
+`scripts/aiv-extract-prompt` and should be on your `PATH`.
+
+### Key binding summary
+
+| Binding | Mode | Action |
+|---|---|---|
+| `Space+v+r` | normal / select | Rewrite selection using inline `## prompt:` comments |
+| `Space+v+c` | normal / select | Load selection as context (no output) |
+| `Space+v+C` | normal / select | Load selection as context, reset conversation first |
+| `Space+v+R` | normal / select | Reset conversation |
+| `Space+v+f` | normal / select | Load entire current buffer as context |
+| `Alt+p` | insert | Insert `## prompt: ` prefix at cursor |
+
 ### 1. Add Selected Text to Context (`Alt+|`)
 Select code in Helix and use pipe-ignore to add context without output:
 ```bash

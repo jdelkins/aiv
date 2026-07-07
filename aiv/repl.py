@@ -9,12 +9,13 @@ from prompt_toolkit.history import FileHistory
 
 from aiv.config import CONFIG_DIR
 from aiv.conversation import get_conversation_file
-from aiv.models import PipelineContext
+from aiv.models import PipelineContext, SetModeCommand, InteractionMode
 from aiv.commands import (
     parse_command,
     run_command,
     cmd_help,
     QuitPipeline,
+    cmd_set_mode,
 )
 from aiv.completion import AivCompleter
 
@@ -61,6 +62,7 @@ def run_repl_loop(ctx: PipelineContext) -> None:
     )
 
     cmd_help()
+    cmd_set_mode(SetModeCommand(mode=InteractionMode.CHAT), ctx)
 
     while True:
         try:

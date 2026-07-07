@@ -4,6 +4,7 @@
   glow,
   git,
   bash,
+  gnused,
   makeWrapper,
 }:
 
@@ -45,10 +46,17 @@ python3Packages.buildPythonApplication {
     runHook postCheck
   '';
 
- postInstall = ''
+  postInstall = ''
     install -Dm755 scripts/aiv-extract-prompt $out/bin/aiv-extract-prompt
     wrapProgram $out/bin/aiv-extract-prompt \
-      --prefix PATH : ${lib.makeBinPath [ bash glow git ]}:$out/bin
+      --prefix PATH : ${
+        lib.makeBinPath [
+          bash
+          gnused
+          glow
+          git
+        ]
+      }:$out/bin
   '';
 
   meta = {

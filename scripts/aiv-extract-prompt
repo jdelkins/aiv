@@ -11,4 +11,20 @@ body="$(printf '%s' "$input" | sed '/^\s*## prompt:/d')"
 prompt_line_count="$(printf '%s' "$input" | grep -c '^\s*## prompt:')"
 adjusted_last="$((lastline - prompt_line_count))"
 
-printf '%s' "$body" | aiv -X -c "stdin,file=$file,range=$firstline:$adjusted_last" "$prompt" 2>/dev/null
+# Capture leading whitespace from the first non-empty line of the input body.
+first_body_line="$(printf '%s' "$body" | grep -m1 '.')"
+leading_ws="$(printf '%s' "$first_body_line" | sed 's/\(^[[:space:]]*\).*/\1/')"
+
+output="$(printf '%s' "$body" | aiv -X -c "stdin,file=$file,range=$firstline:$adjusted_last" "$prompt" 2>/dev/null)"
+
+# Unconditionally replace the leading whitespace of the first output line
+# with the leading whitespace captured from the input.
+first_out_line="$(printf '%s' "$output" | head -1)"
+rest_out="$(printf '%s' "$output" | tail -n +2)"
+first_out_line="${leading_ws}$(printf '%s' "$first_out_line" | sed 's/^[[:space:]]*//')"
+
+if [ -n "$rest_out" ]; then
+  printf '%s\n%s' "$first_out_line" "$rest_out"
+else
+  printf '%s' "$first_out_line"
+fi

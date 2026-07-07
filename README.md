@@ -26,8 +26,8 @@ location detection.
   the REPL, it always asks first
 - **Nix flake**: install with `nix profile install` or run directly with `nix run`
   without any manual setup
-- **Home-manager module**: declarative configuration with sops-nix integration
-  for secure API key management; includes editor keybindings for Helix, Vim, and Neovim
+- **Home-manager module**: declarative configuration including editor keybindings for Helix, Vim,
+  and Neovim
 
 
 ## Installation
@@ -65,17 +65,66 @@ nix profile install github:jdelkins/aiv
 
 ## Configuration
 
+### With the home-manager module
+
+If you are using the provided home-manager module, configuration is handled
+declaratively. Set either `apiKey` or `apiKeyFile` in your home-manager config:
+
+```nix
+{ aiv, config, ... }:
+
+{
+  imports = [ aiv.homeManagerModules.default ];
+
+  programs.aiv = {
+    enable = true;
+    # apiKey writes the key directly into the Nix store — only suitable for
+    # non-sensitive testing or if you accept that trade-off.
+    apiKey = "sk-ant-...";
+
+    # apiKeyFile is preferred for production use: point it at a file delivered
+    # by sops-nix, agenix, or any other secrets manager. The key is read at
+    # runtime and never enters the Nix store.
+    apiKeyFile = config.sops.secrets.anthropic-api-key.path;
+
+    # optional, defaults are as follows or change to suit
+    model = "claude-sonnet-4-6";
+    maxTokens = 4096;
+
+    # optional, not recommended (see below)
+    systemPrompt = "...";
+    codePromptSuffix = "...";
+    chatPromptSuffix = "...";
+  };
+}
+```
+
+`apiKey` and `apiKeyFile` are mutually exclusive; exactly one must be set.
+The module writes `~/.config/aiv/config.toml` for you and manages editor
+keybindings for Helix, Vim, and Neovim.
+
+### Manual configuration
+
 1. Create a configuration directory and file:
    ```bash
    mkdir -p ~/.config/aiv
    ```
 
 2. Configure your API settings in `~/.config/aiv/config.toml`:
-   ```
+   ```toml
+   # Option 1: inline key (simpler, but the key is stored in plaintext on disk)
    api_key = "your_anthropic_api_key"
+
+   # Option 2: read the key from a file at runtime (preferred for security)
+   # api_key_file = "~/.secrets/anthropic-api-key"
+
    model = "claude-sonnet-4-6"
    max_tokens = 4096
    ```
+
+   Use `api_key_file` to keep the key out of the config file itself — useful
+   when the config file is version-controlled or shared, or when a secrets
+   manager such as sops or pass delivers the key as a file.
 
 3. (Optional; not recommended) Configure `sys_prompt`, `mode_chat_suffix`, and
    `mode_code_suffix`. Defaults are tested to work well with this type of
@@ -461,8 +510,7 @@ Major differences from the original:
 - **Glob expansion**: Handled internally and consistently when patterns are
   quoted, rather than relying on shell expansion before the script sees them.
 - **Nix package and home-manager module**: First-class Nix support including a
-  flake, a home-manager module with sops-nix integration, and bundled editor
-  helper scripts.
+  flake, a home-manager module, and bundled editor helper scripts.
 
 ## License
 

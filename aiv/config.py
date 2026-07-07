@@ -45,6 +45,14 @@ def get_config() -> dict:
     # tomllib requires binary mode; available stdlib Python 3.11+
     with open(CONFIG_FILE, "rb") as f:
         config = tomllib.load(f)
+    # resolve api_key from api_key_file if api_key is not directly provided
+    if "api_key" not in config and "api_key_file" in config:
+        key_file = Path(config.pop("api_key_file")).expanduser()
+        if not key_file.exists():
+            raise FileNotFoundError(f"aiv: api_key_file not found: {key_file}")
+        config["api_key"] = key_file.read_text().strip()
+    elif "api_key_file" in config:
+        config.pop("api_key_file")
     # normalise sys_prompt alias
     if "system_prompt" in config and "sys_prompt" not in config:
         config["sys_prompt"] = config.pop("system_prompt")

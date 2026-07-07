@@ -8,19 +8,17 @@
 let
   cfg = config.programs.aiv;
 
-  configTemplateName = "aiv-config";
-
   # Build the TOML attribute set; omit optional keys when null so the tool's
-  # own defaults apply. The api_key value uses the sops placeholder, which is
-  # substituted at activation time and never enters the Nix store.
-  aivConfigAttrs = {
-    api_key = config.sops.placeholder.${cfg.sops.key};
+  # own defaults apply. Exactly one of api_key or api_key_file will be set.
+  aivConfigAttrs = lib.filterAttrs (_k: v: v != null) {
+    api_key = cfg.apiKey;
+    api_key_file = cfg.apiKeyFile;
     model = cfg.model;
     max_tokens = cfg.maxTokens;
-  }
-  // lib.optionalAttrs (cfg.systemPrompt != null) { sys_prompt = cfg.systemPrompt; }
-  // lib.optionalAttrs (cfg.codePromptSuffix != null) { mode_code_suffix = cfg.codePromptSuffix; }
-  // lib.optionalAttrs (cfg.chatPromptSuffix != null) { mode_chat_suffix = cfg.chatPromptSuffix; };
+    sys_prompt = cfg.systemPrompt;
+    mode_code_suffix = cfg.codePromptSuffix;
+    mode_chat_suffix = cfg.chatPromptSuffix;
+  };
 
   aivConfigFile = (pkgs.formats.toml { }).generate "aiv-config.toml" aivConfigAttrs;
 
@@ -36,27 +34,26 @@ in
       description = "The aiv package to install.";
     };
 
-    sops = {
-      file = lib.mkOption {
-        type = lib.types.path;
-        default = ../../secrets/${config.home.username}.yaml;
-        example = "/etc/anthropic.yaml";
-        description = ''
-          Path to the encrypted sops store containing the Anthropic API key.
-        '';
-      };
-      key = lib.mkOption {
-        type = lib.types.str;
-        example = "anthropic-api-key";
-        description = ''
-          Name of the sops-nix secret containing the Anthropic API key.
+    apiKey = lib.mkOption {
+      type = with lib.types; nullOr str;
+      default = null;
+      description = ''
+        Anthropic API key written directly into the aiv config file.
+        Mutually exclusive with apiKeyFile.
+        Warning: this value will be written to the Nix store. Prefer apiKeyFile
+        with a secrets manager such as sops-nix or agenix.
+      '';
+    };
 
-          The generated aiv config uses
-          config.sops.placeholder.''${config.programs.aiv.sops.key} inside a
-          sops template, so the actual API key is substituted at activation time
-          rather than entering the Nix store.
-        '';
-      };
+    apiKeyFile = lib.mkOption {
+      type = with lib.types; nullOr path;
+      default = null;
+      description = ''
+        Path to a file containing the Anthropic API key. aiv reads and strips
+        the file contents at runtime. Use this with sops-nix, agenix, or any
+        other secrets manager that delivers secrets as files.
+        Mutually exclusive with apiKey.
+      '';
     };
 
     model = lib.mkOption {
@@ -100,11 +97,10 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    # sops-nix home-manager module must be imported; verify its options exist.
     assertions = [
       {
-        assertion = config ? sops && config.sops ? placeholder && config.sops ? templates;
-        message = "programs.aiv requires the sops-nix home-manager module to be imported.";
+        assertion = (cfg.apiKey != null) != (cfg.apiKeyFile != null);
+        message = "programs.aiv: exactly one of apiKey or apiKeyFile must be set.";
       }
     ];
 
@@ -113,17 +109,7 @@ in
       pkgs.glow
     ];
 
-    # Declare the secret by name. The actual sopsFile can still be supplied
-    # globally via `sops.defaultSopsFile`, or overridden elsewhere.
-    sops.secrets.${cfg.sops.key}.sopsFile = cfg.sops.file;
-
-    # Use the store-path TOML file as the sops template source. sops-nix reads
-    # the file, substitutes any placeholders it finds (api_key here), and writes
-    # the result to the destination path at activation time.
-    sops.templates.${configTemplateName} = {
-      file = aivConfigFile;
-      path = config.xdg.configHome + "/aiv/config.toml";
-    };
+    xdg.configFile."aiv/config.toml".source = aivConfigFile;
 
     programs.git.ignores = [
       ".aiv-conversation.json" # conversation state

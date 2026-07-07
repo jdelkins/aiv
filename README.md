@@ -24,6 +24,10 @@ location detection.
 - **Safe destructive operations**: `--reset` skips its confirmation prompt only
   when invoked non-interactively with piped stdin; typed at a terminal or inside
   the REPL, it always asks first
+- **Nix flake**: install with `nix profile install` or run directly with `nix run`
+  without any manual setup
+- **Home-manager module**: declarative configuration with sops-nix integration
+  for secure API key management; includes editor keybindings for Helix, Vim, and Neovim
 
 
 ## Installation
@@ -427,17 +431,39 @@ echo ".aiv-conversation.json" >> ~/.gitignore_global
 - **REPL input history**: `.aiv-history` at repo root (or `~/.config/aiv/.aiv-history`)
 - **Configuration**: `~/.config/aiv/config.toml`
 
-## Differences from Shell Version
+## Attribution
 
-- **Conversation file**: Now stored as JSON. Existing conversation files from
-  the shell version are not compatible.
-- **Conversation is preserved by default**: The shell version required `-e` to
+This project was forked from https://github.com/o8vm/aiv, a shell script by
+o8vm, but has been completely rewritten in Python with a substantially different
+architecture and feature set. The core concept — Unix pipe-friendly AI interaction
+— is theirs; everything else has been rebuilt from scratch.
+
+Major differences from the original:
+
+- **Language**: Rewritten in Python; no longer a POSIX shell script.
+- **No curl dependency**: Uses the official Anthropic Python SDK with streaming
+  support.
+- **Conversation format**: Stored as JSON. Existing conversation files from the
+  shell version are not compatible.
+- **Conversation preserved by default**: The shell version required `-e` to
   continue a thread. The Python version preserves state automatically; use
   `-R`/`--reset` to start fresh.
 - **Per-project state**: Conversation is scoped to the git repo root rather than
-  being a single global file.
-- **Glob expansion**: The shell version relied on the shell to expand glob
-  patterns before they reached the script when unquoted. The Python version
-  handles glob expansion internally and behaves consistently whether patterns are
-  quoted or unquoted.
-- **No curl dependency**: HTTP
+  a single global file.
+- **Interactive REPL**: A full interactive session mode (`aiv -i`) with history,
+  tab completion, and rich markdown rendering via `glow`.
+- **Command pipeline architecture**: Every invocation — including REPL commands
+  — is translated into an ordered pipeline of operations executed against a shared
+  session context. Flags compose freely in a single invocation.
+- **Output mode flags**: `-C` (conversational/markdown) and `-X` (code-only) append
+  per-request formatting instructions to the user prompt rather than modifying the
+  system prompt, keeping turns independently inspectable.
+- **Glob expansion**: Handled internally and consistently when patterns are
+  quoted, rather than relying on shell expansion before the script sees them.
+- **Nix package and home-manager module**: First-class Nix support including a
+  flake, a home-manager module with sops-nix integration, and bundled editor
+  helper scripts.
+
+## License
+
+[MIT](./LICENSE)

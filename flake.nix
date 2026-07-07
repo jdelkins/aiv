@@ -12,7 +12,11 @@
       nixpkgs,
       flake-utils,
     }:
-    flake-utils.lib.eachDefaultSystem (
+    # homeManagerModules is not system-specific so it lives outside eachDefaultSystem
+    {
+      homeManagerModules.default = import ./module.nix;
+    }
+    // flake-utils.lib.eachDefaultSystem (
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};

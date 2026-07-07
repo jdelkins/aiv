@@ -2,6 +2,7 @@
   lib,
   python3Packages,
   glow,
+  git,
 }:
 
 let
@@ -26,7 +27,10 @@ python3Packages.buildPythonApplication {
   ];
 
   # glow is a Go binary, not a Python package
-  nativeBuildInputs = [ glow ];
+  nativeBuildInputs = [
+    glow
+    git
+  ];
 
   nativeCheckInputs = with python3Packages; [ pytest ];
 

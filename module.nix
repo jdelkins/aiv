@@ -104,10 +104,7 @@ in
       }
     ];
 
-    home.packages = [
-      cfg.package
-      pkgs.glow
-    ];
+    home.packages = [ cfg.package ];
 
     xdg.configFile."aiv/config.toml".source = aivConfigFile;
 

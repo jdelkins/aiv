@@ -55,8 +55,6 @@ nix profile install github:jdelkins/aiv
    ```bash
    pip install anthropic prompt-toolkit rich
    ```
-   You will also need [glow](https://github.com/charmbracelet/glow) on your PATH
-   for markdown responses to render nicely.
 
 3. Install the package:
    ```bash
@@ -179,7 +177,7 @@ context, sends the prompt, and prints history, all in one command.
   if no range is given. Combine with `-i` to remain in the REPL afterward. You
   may also show only the *user* or *assistant* side of the turn, and specify
   raw mode if desired, like so: `-S "7 assistant -r"`. Here, raw mode means:
-  don't pipe the output through `glow`, even if the text looks like markdown.
+  don't pretty-print the output, even if the text looks like markdown.
 - `-m MODEL`: Use specified model
 - `-s [prompt]`: Override system prompt
 - `-h, -v`: Display help/version information
@@ -190,7 +188,7 @@ Note: `-C` and `-X` are mutually exclusive. When `-i` is used without either,
 ### Interactive REPL (`aiv -i`)
 
 `aiv -i` drops into an interactive session for conversational use. It renders
-responses via `glow` for rich markdown display and shares the same conversation
+responses with rich markdown display and shares the same conversation
 file as any other `aiv` invocation, so context and history built up via pipes
 or one-shot commands is immediately available once you enter the REPL, and
 vice versa.
@@ -500,7 +498,7 @@ Major differences from the original:
 - **Per-project state**: Conversation is scoped to the git repo root rather than
   a single global file.
 - **Interactive REPL**: A full interactive session mode (`aiv -i`) with history,
-  tab completion, and rich markdown rendering via `glow`.
+  tab completion, and rich markdown rendering.
 - **Command pipeline architecture**: Every invocation — including REPL commands
   — is translated into an ordered pipeline of operations executed against a shared
   session context. Flags compose freely in a single invocation.

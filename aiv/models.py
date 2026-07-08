@@ -144,7 +144,6 @@ class PipelineContext:
         max_tokens: int = 4096,
         interactive: bool = False,  # set True by run_repl_loop
         piped_stdin: bool = False,  # True if stdin was a pipe at invocation
-        glow_available: bool = True,  # set False on first FileNotFoundError from glow
         # conv_path_override: pass an explicit Path (e.g. in tests) to skip auto-resolution.
         # Leave as None in production — get_conversation_file() is called lazily on first
         # access to ctx.conv_path, along with load_conversation + validate_conversation.
@@ -157,7 +156,6 @@ class PipelineContext:
         self.max_tokens = max_tokens
         self.interactive = interactive
         self.piped_stdin = piped_stdin
-        self.glow_available = glow_available
         self.conv_path_override = conv_path_override
         self._conv_path: Path | None = None
         self._mode: InteractionMode = InteractionMode.DEFAULT
@@ -246,7 +244,6 @@ class PipelineContext:
             ("max_tokens", str(self.max_tokens)),
             ("interactive", str(self.interactive)),
             ("piped_stdin", str(self.piped_stdin)),
-            ("glow_available", str(self.glow_available)),
             ("api_key", "***" if self.api_key else "[dim]<empty>[/dim]"),
             (
                 "conv_path_override",

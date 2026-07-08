@@ -1,7 +1,6 @@
 {
   lib,
   python3Packages,
-  glow,
   git,
   bash,
   gnused,
@@ -29,9 +28,7 @@ python3Packages.buildPythonApplication {
     rich
   ];
 
-  # glow is a Go binary, not a Python package
   nativeBuildInputs = [
-    glow
     git
     makeWrapper
   ];
@@ -53,7 +50,6 @@ python3Packages.buildPythonApplication {
         lib.makeBinPath [
           bash
           gnused
-          glow
           git
         ]
       }:$out/bin

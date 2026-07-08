@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from rich.console import Console
 from rich.table import Table
+from rich.markdown import Markdown
 from anthropic.types import MessageParam
 
 from aiv.conversation import (
@@ -68,46 +69,96 @@ info = Console(stderr=True)
 # Markdown detection + shared output renderer
 # ---------------------------------------------------------------------------
 
-MARKDOWN_PATTERNS = [
+# Any single strong pattern match → treat as markdown
+MARKDOWN_STRONG = [
+    # fenced code block
     r"^```",
+    # table separator row
     r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$",
+    # markdown link
     r"\[[^\]]+\]\(https?://[^\)]+\)",
-    r"^\*\*[^*]+\*\*:?\s*$",
-    r"^\s*\d+\.\s+\*\*[^*]+\*\*",
-    r"^\s*[-*+]\s+\*\*[^*]+\*\*",
+    # atx heading
+    r"^#{1,6}\s+\S",
+    # blockquote
+    r"^\s*>\s+\S",
 ]
+
+# Three or more weak pattern matches required → treat as markdown
+MARKDOWN_WEAK = [
+    # inline code
+    r"`[^`]+`",
+    # bold
+    r"\*\*[^*]+\*\*",
+    # list item with bold label
+    r"^\s*[-*+]\s+\*\*[^*]+\*\*",
+    # ordered list item with bold label
+    r"^\s*\d+\.\s+\*\*[^*]+\*\*",
+]
+
+# If any of these match, skip markdown rendering regardless of other signals
+MARKDOWN_NEVER = [
+    r"^---CONTEXT_TXT:",
+    r"^raw code\b",
+]
+
+# Tunable thresholds for symbol/digit density heuristic
+_SYMBOL_DENSITY_THRESHOLD = 0.08
+_DIGIT_DENSITY_THRESHOLD = 0.15
+_CODE_SYMBOLS = frozenset(r"{}[]()<>=|;:\\/@#$%^&*~")
+
+
+def _looks_like_code(text: str) -> bool:
+    """Heuristic: high symbol or digit density suggests code/technical output."""
+    n = len(text)
+    if n == 0:
+        return False
+    symbols = sum(1 for c in text if c in _CODE_SYMBOLS)
+    digits = sum(1 for c in text if c.isdigit())
+    return (symbols / n) > _SYMBOL_DENSITY_THRESHOLD or (
+        digits / n
+    ) > _DIGIT_DENSITY_THRESHOLD
 
 
 def looks_like_markdown(text: str) -> bool:
-    for line in text.splitlines():
-        for pattern in MARKDOWN_PATTERNS:
+    lines = text.splitlines()
+    if not lines:
+        return False
+
+    # Negative signals: bail out immediately
+    for line in lines:
+        for pattern in MARKDOWN_NEVER:
+            if re.search(pattern, line):
+                return False
+    if _looks_like_code(text):
+        return False
+
+    # Strong positive signals: any single match is sufficient
+    for line in lines:
+        for pattern in MARKDOWN_STRONG:
             if re.search(pattern, line):
                 return True
+
+    # Weak positive signals: require 3 or more hits across distinct lines
+    weak_hits = 0
+    for line in lines:
+        for pattern in MARKDOWN_WEAK:
+            if re.search(pattern, line):
+                weak_hits += 1
+                if weak_hits >= 3:
+                    return True
+                break  # count at most one weak hit per line
+
     return False
 
 
 def render_output(text: str, ctx: PipelineContext) -> None:
     """
-    Canonical output renderer: glow for markdown, raw print for code mode or
-    plain text. Falls back to print if glow is not installed, warning once per
-    session via ctx.glow_available.
+    Canonical output renderer: rich Markdown for markdown content, raw print
+    for code mode or plain text.
     """
     if ctx.mode != InteractionMode.CODE and looks_like_markdown(text):
-        if ctx.glow_available:
-            try:
-                width = shutil.get_terminal_size().columns
-                subprocess.run(
-                    ["glow", "--width", str(width), "-"],
-                    input=text,
-                    text=True,
-                )
-                return
-            except FileNotFoundError:
-                ctx.glow_available = False
-                info.print(
-                    "aiv: warning: glow not found, falling back to plain output. "
-                    "Install glow for markdown rendering: https://github.com/charmbracelet/glow"
-                )
+        console.print(Markdown(text))
+        return
     print(text)
 
 

@@ -189,7 +189,7 @@ class TestCommandsFromArgs:
 
 
 # ---------------------------------------------------------------------------
-# render_output — glow fallback
+# render_output
 # ---------------------------------------------------------------------------
 
 # A string that reliably triggers looks_like_markdown
@@ -205,68 +205,30 @@ class TestRenderOutput:
 
     def test_code_mode_always_prints_directly(self, ctx, capsys):
         ctx.mode = InteractionMode.CODE
-        # Even markdown-looking text should bypass glow in code mode
-        with patch("subprocess.run") as mock_run:
-            render_output(MARKDOWN_TEXT, ctx)
-            mock_run.assert_not_called()
+        render_output(MARKDOWN_TEXT, ctx)
         assert MARKDOWN_TEXT in capsys.readouterr().out
 
-    def test_glow_called_for_markdown_in_chat_mode(self, ctx):
+    def test_markdown_rendered_in_chat_mode(self, ctx):
+        # rich.console.Console.print should be called for markdown in chat mode
         ctx.mode = InteractionMode.CHAT
-        with patch("subprocess.run") as mock_run:
+        with patch("aiv.commands.console") as mock_console:
             render_output(MARKDOWN_TEXT, ctx)
-            mock_run.assert_called_once()
-            call_args = mock_run.call_args
-            assert call_args[0][0][0] == "glow"
+            mock_console.print.assert_called_once()
 
-    def test_glow_called_for_markdown_in_default_mode(self, ctx):
-        # DEFAULT mode should also use glow for markdown
+    def test_markdown_rendered_in_default_mode(self, ctx):
+        # DEFAULT mode should also use rich for markdown
         assert ctx.mode == InteractionMode.DEFAULT
-        with patch("subprocess.run") as mock_run:
+        with patch("aiv.commands.console") as mock_console:
             render_output(MARKDOWN_TEXT, ctx)
-            mock_run.assert_called_once()
-            assert mock_run.call_args[0][0][0] == "glow"
+            mock_console.print.assert_called_once()
 
-    def test_glow_missing_sets_flag_and_warns(self, ctx, capsys):
-        ctx.mode = InteractionMode.CHAT
-        ctx.glow_available = True
-        with patch("subprocess.run", side_effect=FileNotFoundError):
-            render_output(MARKDOWN_TEXT, ctx)
-        assert getattr(ctx, "glow_available") is False
-        assert "glow" in capsys.readouterr().err.lower()
-
-    def test_glow_missing_falls_back_to_print(self, ctx, capsys):
-        ctx.mode = InteractionMode.CHAT
-        ctx.glow_available = True
-        with patch("subprocess.run", side_effect=FileNotFoundError):
-            render_output(MARKDOWN_TEXT, ctx)
-        assert MARKDOWN_TEXT in capsys.readouterr().out
-
-    def test_glow_warning_emitted_only_once(self, ctx, capsys):
-        ctx.mode = InteractionMode.CHAT
-        ctx.glow_available = True
-        with patch("subprocess.run", side_effect=FileNotFoundError):
-            render_output(MARKDOWN_TEXT, ctx)
-            render_output(MARKDOWN_TEXT, ctx)
-        err = capsys.readouterr().err
-        # Warning should appear exactly once across both calls
-        assert err.lower().count("glow not found") == 1
-
-    def test_glow_skipped_when_already_marked_unavailable(self, ctx, capsys):
-        ctx.mode = InteractionMode.CHAT
-        ctx.glow_available = False
-        with patch("subprocess.run") as mock_run:
-            render_output(MARKDOWN_TEXT, ctx)
-            mock_run.assert_not_called()
-        assert MARKDOWN_TEXT in capsys.readouterr().out
-
-    def test_custom_mode_uses_glow_for_markdown(self, ctx):
-        # CUSTOM mode (set via mode_suffix) should still use glow for markdown
+    def test_markdown_rendered_in_custom_mode(self, ctx):
+        # CUSTOM mode should still use rich for markdown
         ctx.mode_suffix = "respond tersely"
         assert ctx.mode == InteractionMode.CUSTOM
-        with patch("subprocess.run") as mock_run:
+        with patch("aiv.commands.console") as mock_console:
             render_output(MARKDOWN_TEXT, ctx)
-            mock_run.assert_called_once()
+            mock_console.print.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

@@ -13,7 +13,7 @@ from aiv.models import PipelineContext, SetModeCommand, InteractionMode
 from aiv.commands import (
     parse_command,
     run_command,
-    cmd_help,
+    cmd_intro,
     QuitPipeline,
     cmd_set_mode,
 )
@@ -61,7 +61,7 @@ def run_repl_loop(ctx: PipelineContext) -> None:
         complete_while_typing=False,  # Tab-triggered only; live completion is noisy
     )
 
-    cmd_help()
+    cmd_intro()
     if ctx.mode == InteractionMode.DEFAULT:
         cmd_set_mode(SetModeCommand(mode=InteractionMode.CHAT), ctx)
 

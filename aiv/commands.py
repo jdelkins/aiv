@@ -43,8 +43,10 @@ from aiv.models import (
     SetMaxTokensCommand,
     SetSysPromptCommand,
     SetModeCommand,
+    SetPromptSuffixCommand,
     PipelineContext,
     ShowVersionCommand,
+    ShowPipelineContextCommand,
 )
 from aiv.specs import (
     COMMAND_SPECS,
@@ -381,6 +383,13 @@ def cmd_set_mode(cmd: SetModeCommand, ctx: PipelineContext):
         info.print(f"[green]Mode set to: {ctx.mode.value}[/green]")
 
 
+def cmd_set_prompt_suffix(cmd: SetPromptSuffixCommand, ctx: PipelineContext):
+    if cmd.suffix is not None:
+        ctx.mode_suffix = "\n\n" + cmd.suffix
+    if ctx.interactive:
+        info.print(f"[green]Prompt suffix set to: {ctx.mode_suffix}[/green]")
+
+
 def cmd_help():
     table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
     table.add_column(style="cyan", no_wrap=True)
@@ -401,8 +410,21 @@ def cmd_help():
     )
 
 
+def cmd_intro():
+    console.print(
+        "\n[bold cyan]aiv REPL:[/bold cyan] [cyan]Type a prompt or !help for a list of commands.[/cyan]"
+    )
+    console.print(
+        "[dim]Alt-Enter (or Escape then Enter) submits a prompt or command.\n"
+    )
+
+
 def cmd_version():
     console.print(f"aiv {get_version()}\n")
+
+
+def cmd_pipeline_context(ctx):
+    console.print(f"{ctx}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -513,6 +535,8 @@ def run_command(cmd: Command, ctx: PipelineContext) -> None:
         cmd_set_sys_prompt(cmd, ctx)
     elif isinstance(cmd, SetModeCommand):
         cmd_set_mode(cmd, ctx)
+    elif isinstance(cmd, SetPromptSuffixCommand):
+        cmd_set_prompt_suffix(cmd, ctx)
     elif isinstance(cmd, HelpCommand):
         cmd_help()
     elif isinstance(cmd, ReplCommand):
@@ -522,6 +546,8 @@ def run_command(cmd: Command, ctx: PipelineContext) -> None:
         run_repl_loop(ctx)
     elif isinstance(cmd, ShowVersionCommand):
         cmd_version()
+    elif isinstance(cmd, ShowPipelineContextCommand):
+        cmd_pipeline_context(ctx)
     elif isinstance(cmd, ExitCommand):
         raise QuitPipeline()
     elif isinstance(cmd, NoOpCommand):

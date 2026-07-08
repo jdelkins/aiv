@@ -22,6 +22,8 @@ from aiv.models import (
     SetSysPromptCommand,
     SetModeCommand,
     ShowVersionCommand,
+    ShowPipelineContextCommand,
+    SetPromptSuffixCommand,
 )
 
 
@@ -180,6 +182,16 @@ COMMAND_SPECS: list[CommandSpec] = [
         precedence=20,
     ),
     CommandSpec(
+        names=("!suffix",),
+        long_option="--prompt-suffix",
+        short_option=None,
+        usage="<suffix>",
+        help="Set a custom prompt suffix",
+        parse=lambda args: SetPromptSuffixCommand(args.strip() if args != "" else None),
+        argparse_kwargs=dict(default=None, metavar="SUFFIX"),
+        precedence=25,
+    ),
+    CommandSpec(
         names=("!context",),
         long_option="--context",
         short_option="-c",
@@ -250,6 +262,15 @@ COMMAND_SPECS: list[CommandSpec] = [
         help="Display version information",
         parse=lambda _args: ShowVersionCommand(),
         argparse_kwargs=dict(action="store_true"),
+        precedence=50,
+    ),
+    CommandSpec(
+        names=("!params",),
+        long_option=None,
+        short_option=None,
+        usage="",
+        help="Show runtime parameters",
+        parse=lambda _args: ShowPipelineContextCommand(),
         precedence=50,
     ),
     CommandSpec(

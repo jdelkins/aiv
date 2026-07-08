@@ -181,6 +181,10 @@ def cmd_show(cmd: ShowCommand, ctx: PipelineContext):
     messages = load_conversation(ctx.conv_path)
     interactions = build_interactions(messages)
 
+    if not interactions:
+        info.print("[yellow]No conversation history.[/yellow]")
+        return
+
     # If no positional args, show entire history
     range_str = parts[0] if parts else "1-"
 

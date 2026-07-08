@@ -15,9 +15,9 @@ else
 	input_had_trailing_newline=false
 fi
 
-prompt="$(printf '%s' "$input" | sed -n 's/^\s*## prompt:\s*//p' | tr '\n' ' ' | sed 's/ $//')"
-body="$(printf '%s' "$input" | sed '/^\s*## prompt:/d')"
-prompt_line_count="$(printf '%s' "$input" | grep -c '^\s*## prompt:')"
+prompt="$(printf '%s' "$input" | sed -n 's/^[[:space:]]*## prompt:[[:space:]]*//p' | sed 's/[[:space:]]*$//')"
+body="$(printf '%s' "$input" | sed '/^[[:space:]]*## prompt:/d')"
+prompt_line_count="$(printf '%s' "$input" | grep -c '^[[:space:]]*## prompt:')"
 adjusted_last="$((lastline - prompt_line_count))"
 
 # Capture leading whitespace from the first non-empty line of the input body.

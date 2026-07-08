@@ -164,9 +164,6 @@ def cmd_history(cmd: HistoryCommand, ctx: PipelineContext):
 
 def cmd_show(cmd: ShowCommand, ctx: PipelineContext):
     parts = cmd.args.strip().split()
-    if not parts:
-        info.print("[red]Usage: !show <num|range> [user|assistant] [--raw|-r][/red]")
-        return
 
     raw_mode = False
     filtered_parts = []
@@ -180,9 +177,12 @@ def cmd_show(cmd: ShowCommand, ctx: PipelineContext):
     messages = load_conversation(ctx.conv_path)
     interactions = build_interactions(messages)
 
-    range_tuple = parse_range(parts[0], len(interactions))
+    # If no positional args, show entire history
+    range_str = parts[0] if parts else "1-"
+
+    range_tuple = parse_range(range_str, len(interactions))
     if range_tuple is None:
-        info.print(f"[red]Invalid number or range: {parts[0]}[/red]")
+        info.print(f"[red]Invalid number or range: {range_str}[/red]")
         return
     start, end = range_tuple
 

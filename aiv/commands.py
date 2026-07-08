@@ -1,12 +1,11 @@
 from __future__ import annotations
 from aiv.config import get_version
-
+import shutil
 import glob
 import re
 import subprocess
 import sys
 from pathlib import Path
-
 from rich.console import Console
 from rich.table import Table
 from anthropic.types import MessageParam
@@ -94,7 +93,12 @@ def render_output(text: str, ctx: PipelineContext) -> None:
     if ctx.mode != InteractionMode.CODE and looks_like_markdown(text):
         if ctx.glow_available:
             try:
-                subprocess.run(["glow", "-"], input=text, text=True)
+                width = shutil.get_terminal_size().columns
+                subprocess.run(
+                    ["glow", "--width", str(width), "-"],
+                    input=text,
+                    text=True,
+                )
                 return
             except FileNotFoundError:
                 ctx.glow_available = False

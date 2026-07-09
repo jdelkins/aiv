@@ -5,8 +5,8 @@ import argparse
 
 from aiv.config import get_config
 from aiv.models import PipelineContext, InteractionMode
-from aiv.specs import COMMAND_SPECS, OPTION_LOOKUP
-from aiv.commands import commands_from_args, run_pipeline, cmd_help
+from aiv.specs import COMMAND_SPECS
+from aiv.commands import commands_from_args, run_pipeline
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -110,7 +110,7 @@ def main():
         initial_mode = InteractionMode.CODE
 
     ctx = PipelineContext(
-        model=config.get("model", "claude-3-7-sonnet-latest"),
+        model=config.get("model", "claude-sonnet-4-6"),
         sys_prompt=config.get("sys_prompt", ""),
         mode=initial_mode,
         api_key=api_key,

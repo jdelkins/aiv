@@ -1,18 +1,23 @@
 from __future__ import annotations
-import sys
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-
 from aiv.config import get_config
 
 
-class InteractionMode(Enum):
+class InteractionMode(str, Enum):
     CHAT = "chat"
     CODE = "code"
     CUSTOM = "custom"
     DEFAULT = "default"
+
+
+# Exception class — add to conversation.py (or a dedicated exceptions.py)
+class ConversationError(Exception):
+    """Raised when a conversation file fails structural validation."""
+
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -167,16 +172,9 @@ class PipelineContext:
     @property
     def conv_path(self) -> Path:
         if self._conv_path is None:
-            from aiv.conversation import (
-                get_conversation_file,
-                load_conversation,
-                validate_conversation,
-            )
+            from aiv.conversation import get_conversation_file
 
-            path = self.conv_path_override or get_conversation_file()
-            messages = load_conversation(path)
-            validate_conversation(messages, path)
-            self._conv_path = path
+            self._conv_path = self.conv_path_override or get_conversation_file()
         return self._conv_path
 
     @property

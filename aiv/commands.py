@@ -1,18 +1,14 @@
 from __future__ import annotations
 from aiv.config import get_version
-import shutil
 import glob
 import re
-import subprocess
 import sys
-from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 from rich.markdown import Markdown
-from anthropic.types import MessageParam
+from rich.markup import escape
 
 from aiv.conversation import (
-    get_conversation_file,
     load_conversation,
     save_conversation,
     reset_conversation,
@@ -23,7 +19,8 @@ from aiv.conversation import (
     first_line,
     format_bytes,
     parse_range,
-    strip_context_blocks,
+    StoredMessage,
+    ConversationError,
 )
 from aiv.content import build_user_content
 from aiv.api import run_turn
@@ -54,7 +51,6 @@ from aiv.specs import (
     COMMAND_LOOKUP,
     OPTION_LOOKUP,
     PROMPT_SPEC,
-    CommandSpec,
 )
 
 # stdout console for primary output (history tables, show content, help)
@@ -159,7 +155,7 @@ def render_output(text: str, ctx: PipelineContext) -> None:
     if ctx.mode != InteractionMode.CODE and looks_like_markdown(text):
         console.print(Markdown(text))
         return
-    print(text)
+    console.print(escape(text))
 
 
 # ---------------------------------------------------------------------------
@@ -167,10 +163,11 @@ def render_output(text: str, ctx: PipelineContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-def print_history_table(interactions: list[list[MessageParam]], start: int, end: int):
+def print_history_table(interactions: list[list[StoredMessage]], start: int, end: int):
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("#", style="dim", width=4, justify="right")
     table.add_column("Role", width=10)
+    table.add_column("Mode", width=10)
     table.add_column("Context", width=14, justify="right")
     table.add_column("First Line")
 
@@ -178,17 +175,24 @@ def print_history_table(interactions: list[list[MessageParam]], start: int, end:
         interaction = interactions[i]
         num = str(i + 1)
         for msg in interaction:
-            role = msg["role"]
-            content = msg["content"]
+            mode = str(msg["mode"])
+            role = msg["message"]["role"]
+            content = msg["message"]["content"]
             content_str = content if isinstance(content, str) else str(content)
             total_bytes = len(content_str.encode())
             block_count = count_context_blocks(content_str)
             ctx_str = format_bytes(total_bytes)
             if block_count:
                 ctx_str += f" / {block_count}f"
-            fl = first_line(content_str)
+            fl = escape(first_line(content_str))
             role_style = "green" if role == "user" else "magenta"
-            table.add_row(num, f"[{role_style}]{role}[/{role_style}]", ctx_str, fl)
+            table.add_row(
+                num,
+                f"[{role_style}]{role}[/{role_style}]",
+                f"[dim]{mode}[/dim]",
+                ctx_str,
+                fl,
+            )
             num = ""
 
     console.print(table)
@@ -256,18 +260,19 @@ def cmd_show(cmd: ShowCommand, ctx: PipelineContext):
         interaction = interactions[i]
         num = i + 1
         for msg in interaction:
-            if role_filter and msg["role"] != role_filter:
+            if role_filter and msg["message"]["role"] != role_filter:
                 continue
-            content = msg["content"]
+            mode = msg["mode"]
+            content = msg["message"]["content"]
             content_str = content if isinstance(content, str) else str(content)
-            role = msg["role"]
+            role = msg["message"]["role"]
             role_style = "green" if role == "user" else "magenta"
             # headers go to stderr; content goes to stdout via render_output
             info.print(
                 f"\n[bold {role_style}]--- {role} (interaction {num}) ---[/bold {role_style}]"
             )
-            if raw_mode:
-                print(content_str)
+            if raw_mode or mode == InteractionMode.CODE:
+                console.print(escape(content_str))
             else:
                 render_output(content_str, ctx)
 
@@ -290,7 +295,7 @@ def cmd_delete(cmd: DeleteCommand, ctx: PipelineContext):
     remaining_after = interactions[end:]
     if start == 1 and remaining_after:
         first_remaining = remaining_after[0][0]
-        if first_remaining["role"] != "user":
+        if first_remaining["message"]["role"] != "user":
             info.print(
                 "[bold red]Warning:[/bold red] This would leave the conversation "
                 "starting with an assistant turn, which is invalid for the Anthropic API."
@@ -324,23 +329,26 @@ def cmd_delete(cmd: DeleteCommand, ctx: PipelineContext):
 
 
 def cmd_reset(ctx: PipelineContext):
-    messages = load_conversation(ctx.conv_path)
-    interactions = build_interactions(messages)
     should_confirm = ctx.interactive or not ctx.piped_stdin
-
-    if not interactions:
-        if should_confirm:
-            info.print("[yellow]Conversation is already empty.[/yellow]")
-        return
-
     if not should_confirm:
         reset_conversation(ctx.conv_path)
         return
 
-    info.print(
-        f"\n[bold]Current conversation ({len(interactions)} interaction(s)):[/bold]"
-    )
-    print_history_table(interactions, 1, len(interactions))
+    try:
+        messages = load_conversation(ctx.conv_path)
+        interactions = build_interactions(messages)
+        if not interactions:
+            if should_confirm:
+                info.print("[yellow]Conversation is already empty.[/yellow]")
+            return
+        info.print(
+            f"\n[bold]Current conversation ({len(interactions)} interaction(s)):[/bold]"
+        )
+        print_history_table(interactions, 1, len(interactions))
+    except ConversationError as e:
+        info.print(
+            f"\n[bold red]Conversation file is invalid: {escape(str(e))}[/bold red]"
+        )
 
     try:
         confirm = console.input(
@@ -365,6 +373,7 @@ def cmd_context(cmd: ContextCommand, ctx: PipelineContext):
             info.print("[yellow]No stdin data to add as context.[/yellow]")
             return
         append_user_turn(
+            InteractionMode.CODE,
             build_user_content(
                 "",
                 [],
@@ -378,10 +387,16 @@ def cmd_context(cmd: ContextCommand, ctx: PipelineContext):
     else:
         matches = glob.glob(cmd.path, recursive=True)
         if not matches:
-            info.print(f"[red]No files matched: {cmd.path}[/red]")
+            info.print(f"[red]No files matched: {escape(cmd.path)}[/red]")
             return
-        append_user_turn(build_user_content("", [cmd.path], None), ctx.conv_path)
-        info.print(f"[green]Added context: {cmd.path} ({len(matches)} file(s))[/green]")
+        append_user_turn(
+            InteractionMode.CODE,
+            build_user_content("", [cmd.path], None),
+            ctx.conv_path,
+        )
+        info.print(
+            f"[green]Added context: {escape(cmd.path)} ({len(matches)} file(s))[/green]"
+        )
 
 
 def cmd_prompt(cmd: PromptCommand, ctx: PipelineContext):
@@ -392,6 +407,7 @@ def cmd_prompt(cmd: PromptCommand, ctx: PipelineContext):
             prompt=cmd.text,
             context_files=[],
             stdin_data=stdin_data,
+            mode=ctx.mode,
             mode_suffix=ctx.mode_suffix,
             api_key=ctx.api_key,
             model=ctx.model,
@@ -400,7 +416,7 @@ def cmd_prompt(cmd: PromptCommand, ctx: PipelineContext):
             conv_path=ctx.conv_path,
         )
     except Exception as e:
-        info.print(f"[red]aiv: {e}[/red]")
+        info.print(f"[red]aiv: {escape(str(e))}[/red]")
         return
 
     render_output(response_text, ctx)
@@ -410,7 +426,7 @@ def cmd_set_model(cmd: SetModelCommand, ctx: PipelineContext):
     if cmd.model is not None:
         ctx.model = cmd.model
     if ctx.interactive:
-        info.print(f"[green]Model set to: {ctx.model}[/green]")
+        info.print(f"[green]Model set to: {escape(ctx.model)}[/green]")
 
 
 def cmd_set_max_tokens(cmd: SetMaxTokensCommand, ctx: PipelineContext):
@@ -424,7 +440,7 @@ def cmd_set_sys_prompt(cmd: SetSysPromptCommand, ctx: PipelineContext):
     if cmd.sys_prompt is not None:
         ctx.sys_prompt = cmd.sys_prompt
     if ctx.interactive:
-        info.print(f"[green]sys_prompt set to: {ctx.sys_prompt}[/green]")
+        info.print(f"[green]sys_prompt set to: {escape(ctx.sys_prompt)}[/green]")
 
 
 def cmd_set_mode(cmd: SetModeCommand, ctx: PipelineContext):
@@ -438,7 +454,7 @@ def cmd_set_prompt_suffix(cmd: SetPromptSuffixCommand, ctx: PipelineContext):
     if cmd.suffix is not None:
         ctx.mode_suffix = "\n\n" + cmd.suffix
     if ctx.interactive:
-        info.print(f"[green]Prompt suffix set to: {ctx.mode_suffix}[/green]")
+        info.print(f"[green]Prompt suffix set to: {escape(ctx.mode_suffix)}[/green]")
 
 
 def cmd_help():
@@ -449,11 +465,11 @@ def cmd_help():
     console.print("\n [bold blue]aiv REPL commands[/bold blue]\n")
     for spec in COMMAND_SPECS:
         if not spec.names:
-            continue  # skip the bare-prompt pseudo-spec
+            continue  # skip the bare-prompt pseudo-spec and other commandline-only specs
         name = ", ".join(spec.names)
         display_usage = spec.repl_usage if spec.repl_usage is not None else spec.usage
         full_usage = f"{name} {display_usage}".strip()
-        table.add_row(full_usage, spec.help)
+        table.add_row(escape(full_usage), escape(spec.help))
     console.print(table)
     console.print(
         "\n [dim]Alt-Enter (or Escape then Enter) submits a prompt "
@@ -471,7 +487,7 @@ def cmd_intro():
 
 
 def cmd_version():
-    console.print(f"aiv {get_version()}\n")
+    console.print(f"aiv {escape(get_version())}\n")
 
 
 def cmd_pipeline_context(ctx):
@@ -495,7 +511,7 @@ def parse_command(text: str) -> Command:
     spec = COMMAND_LOOKUP.get(name)
     if spec is None:
         info.print(
-            f"[red]Unknown command: {name}. Type !help for available commands.[/red]"
+            f"[red]Unknown command: {escape(name)}. Type !help for available commands.[/red]"
         )
         return NoOpCommand()
 
@@ -610,5 +626,10 @@ def run_pipeline(commands: list[Command], ctx: PipelineContext) -> None:
     try:
         for cmd in commands:
             run_command(cmd, ctx)
+    except ConversationError as e:
+        info.print(
+            f"[red]aiv: Conversation file is invalid. Please reset it. Error: {escape(str(e))}[/red]"
+        )
+        sys.exit(1)
     except QuitPipeline:
         pass

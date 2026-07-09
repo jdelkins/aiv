@@ -1,7 +1,8 @@
 from __future__ import annotations
+from aiv.models import InteractionMode, ConversationError
 from functools import lru_cache
 import subprocess
-from typing import Literal, cast
+from typing import TypedDict
 
 
 import json
@@ -11,6 +12,11 @@ from pathlib import Path
 from anthropic.types import MessageParam
 
 from aiv.config import FALLBACK_CONVERSATION_FILE
+
+
+class StoredMessage(TypedDict):
+    message: MessageParam
+    mode: InteractionMode
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +69,11 @@ def parse_range(range_str: str, max_num: int) -> tuple[int, int] | None:
 def first_line(content: str) -> str:
     """Return the first non-empty line of content after stripping context blocks."""
     stripped = strip_context_blocks(content).strip()
+    if not stripped:
+        for line in content.splitlines():
+            line = line.strip()
+            if line:
+                return line[:80]
     for line in stripped.splitlines():
         line = line.strip()
         if line:
@@ -136,7 +147,7 @@ def get_conversation_file() -> Path:
 # ---------------------------------------------------------------------------
 
 
-def load_conversation(path: Path) -> list[MessageParam]:
+def load_conversation(path: Path) -> list[StoredMessage]:
     """
     Read conversation JSON from disk. Returns [] if the file does not exist.
     Raises SystemExit on malformed JSON — callers should treat this as fatal
@@ -171,10 +182,14 @@ def load_conversation(path: Path) -> list[MessageParam]:
         )
         sys.exit(1)
 
+    warnings = validate_conversation(messages)
+    for w in warnings:
+        print(f"aiv: conversation file {path}: {w}", file=sys.stderr)
+
     return messages
 
 
-def save_conversation(messages: list[MessageParam], path: Path) -> None:
+def save_conversation(messages: list[StoredMessage], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"messages": messages}, indent=2))
 
@@ -188,63 +203,60 @@ def reset_conversation(path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def validate_conversation(messages: list[MessageParam], path: Path) -> None:
+# Warning strings are returned so the caller decides how to present them.
+def validate_conversation(messages: list[StoredMessage]) -> list[str]:
     """
-    Validate the structure of a loaded conversation. Hard-errors on structural
-    problems that would cause API failures or data loss. Warns on recoverable
-    issues (wrong first role, consecutive same-role messages).
+    Validate the structure of a loaded conversation. Raises ConversationError on
+    structural problems that would cause API failures or data loss. Returns a list
+    of warning strings for recoverable issues (wrong first role, consecutive
+    same-role messages) — the caller is responsible for displaying them.
 
     Should be called in main() after load_conversation, before the pipeline runs.
     """
+    warnings: list[str] = []
+
     for i, msg in enumerate(messages):
         if not isinstance(msg, dict):
-            print(
-                f"aiv: conversation file {path}: message {i} is not an object",
-                file=sys.stderr,
+            raise ConversationError(f"message {i} is not an object")
+        if "mode" not in msg:
+            raise ConversationError(f"message {i} missing 'mode'")
+        if msg["mode"] not in (
+            InteractionMode.CHAT,
+            InteractionMode.CODE,
+            InteractionMode.DEFAULT,
+            InteractionMode.CUSTOM,
+        ):
+            raise ConversationError(f"message {i} has invalid mode {msg['mode']!r}")
+        if "message" not in msg:
+            raise ConversationError(f"message {i} missing 'message'")
+        msgparam = msg["message"]
+        if "role" not in msgparam:
+            raise ConversationError(f"message {i} missing 'role'")
+        if "content" not in msgparam:
+            raise ConversationError(f"message {i} missing 'content'")
+        if msgparam["role"] not in ("user", "assistant"):
+            raise ConversationError(
+                f"message {i} has invalid role {msgparam['role']!r}"
             )
-            sys.exit(1)
-        if "role" not in msg:
-            print(
-                f"aiv: conversation file {path}: message {i} missing 'role'",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        if "content" not in msg:
-            print(
-                f"aiv: conversation file {path}: message {i} missing 'content'",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        if msg["role"] not in ("user", "assistant"):
-            print(
-                f"aiv: conversation file {path}: message {i} has invalid role {msg['role']!r}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        if not isinstance(msg["content"], (str, list)):
-            print(
-                f"aiv: conversation file {path}: message {i} 'content' must be a string or list",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+        if not isinstance(msgparam["content"], (str, list)):
+            raise ConversationError(f"message {i} 'content' must be a string or list")
 
-    if messages and messages[0]["role"] != "user":
-        print(
-            f"aiv: warning: conversation file {path}: first message is not from 'user' — "
-            "the Anthropic API may reject this",
-            file=sys.stderr,
+    if messages and messages[0]["message"]["role"] != "user":
+        warnings.append(
+            f"first message is not from 'user' — the Anthropic API may reject this"
         )
 
     for i in range(1, len(messages)):
         if (
-            messages[i]["role"] == "assistant"
-            and messages[i - 1]["role"] == "assistant"
+            messages[i]["message"]["role"] == "assistant"
+            and messages[i - 1]["message"]["role"] == "assistant"
         ):
-            print(
-                f"aiv: warning: conversation file {path}: consecutive assistant messages "
-                f"at positions {i - 1} and {i} — the Anthropic API may reject this",
-                file=sys.stderr,
+            warnings.append(
+                f"consecutive assistant messages at positions {i - 1} and {i} "
+                f"— the Anthropic API may reject this"
             )
+
+    return warnings
 
 
 # ---------------------------------------------------------------------------
@@ -252,12 +264,14 @@ def validate_conversation(messages: list[MessageParam], path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def append_user_turn(content: str, path: Path) -> list[MessageParam]:
+def append_user_turn(
+    mode: InteractionMode, content: str, path: Path
+) -> list[StoredMessage]:
     """
     Append a user message to the conversation file and return the updated list.
     """
     messages = load_conversation(path)
-    messages.append({"role": "user", "content": content})
+    messages.append({"mode": mode, "message": {"role": "user", "content": content}})
     save_conversation(messages, path)
     return messages
 
@@ -267,17 +281,17 @@ def append_user_turn(content: str, path: Path) -> list[MessageParam]:
 # ---------------------------------------------------------------------------
 
 
-def build_interactions(messages: list[MessageParam]) -> list[list[MessageParam]]:
+def build_interactions(messages: list[StoredMessage]) -> list[list[StoredMessage]]:
     """
     Group messages into interactions. Each interaction starts at a user turn
     and contains all subsequent messages until (but not including) the next
     user turn. Interaction numbers are 1-indexed.
     """
-    interactions: list[list[MessageParam]] = []
-    current: list[MessageParam] | None = None
+    interactions: list[list[StoredMessage]] = []
+    current: list[StoredMessage] | None = None
 
     for msg in messages:
-        if msg["role"] == "user":
+        if msg["message"]["role"] == "user":
             if current is not None:
                 interactions.append(current)
             current = [msg]
@@ -293,5 +307,7 @@ def build_interactions(messages: list[MessageParam]) -> list[list[MessageParam]]
     return interactions
 
 
-def flatten_interactions(interactions: list[list[MessageParam]]) -> list[MessageParam]:
+def flatten_interactions(
+    interactions: list[list[StoredMessage]],
+) -> list[StoredMessage]:
     return [msg for interaction in interactions for msg in interaction]

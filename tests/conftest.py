@@ -19,5 +19,5 @@ def minimal_ctx(tmp_conv_path) -> PipelineContext:
     """
     return PipelineContext(
         api_key="test-key",
-        conv_path=tmp_conv_path,
+        conv_path_override=tmp_conv_path,
     )

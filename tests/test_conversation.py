@@ -1,10 +1,9 @@
 from __future__ import annotations
+from aiv.models import InteractionMode, ConversationError
 
 import json
 import pytest
-from pathlib import Path
 from typing import cast, Any
-from anthropic.types import MessageParam
 
 from aiv.conversation import (
     parse_range,
@@ -17,6 +16,7 @@ from aiv.conversation import (
     validate_conversation,
     load_conversation,
     save_conversation,
+    StoredMessage,
 )
 
 
@@ -73,24 +73,51 @@ class TestBuildInteractions:
         assert build_interactions([]) == []
 
     def test_single_user_turn(self):
-        msgs: list[MessageParam] = [{"role": "user", "content": "hi"}]
-        assert build_interactions(msgs) == [[{"role": "user", "content": "hi"}]]
+        msgs: list[StoredMessage] = [
+            {"mode": InteractionMode.CHAT, "message": {"role": "user", "content": "hi"}}
+        ]
+        assert build_interactions(msgs) == [
+            [
+                {
+                    "mode": InteractionMode.CHAT,
+                    "message": {"role": "user", "content": "hi"},
+                }
+            ]
+        ]
 
     def test_user_assistant_pair(self):
-        msgs: list[MessageParam] = [
-            {"role": "user", "content": "hi"},
-            {"role": "assistant", "content": "hello"},
+        msgs: list[StoredMessage] = [
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "user", "content": "hi"},
+            },
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "assistant", "content": "hello"},
+            },
         ]
         result = build_interactions(msgs)
         assert len(result) == 1
         assert result[0] == msgs
 
     def test_multiple_interactions(self):
-        msgs: list[MessageParam] = [
-            {"role": "user", "content": "q1"},
-            {"role": "assistant", "content": "a1"},
-            {"role": "user", "content": "q2"},
-            {"role": "assistant", "content": "a2"},
+        msgs: list[StoredMessage] = [
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "user", "content": "q1"},
+            },
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "assistant", "content": "a1"},
+            },
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "user", "content": "q2"},
+            },
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "assistant", "content": "a2"},
+            },
         ]
         result = build_interactions(msgs)
         assert len(result) == 2
@@ -99,15 +126,26 @@ class TestBuildInteractions:
 
     def test_orphaned_assistant_turn(self):
         # Assistant message with no preceding user turn is grouped alone
-        msgs: list[MessageParam] = [{"role": "assistant", "content": "stray"}]
+        msgs: list[StoredMessage] = [
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "assistant", "content": "stray"},
+            }
+        ]
         result = build_interactions(msgs)
         assert len(result) == 1
         assert result[0] == msgs
 
     def test_consecutive_user_turns(self):
-        msgs: list[MessageParam] = [
-            {"role": "user", "content": "q1"},
-            {"role": "user", "content": "q2"},
+        msgs: list[StoredMessage] = [
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "user", "content": "q1"},
+            },
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "user", "content": "q2"},
+            },
         ]
         result = build_interactions(msgs)
         assert len(result) == 2
@@ -115,11 +153,23 @@ class TestBuildInteractions:
 
 class TestFlattenInteractions:
     def test_round_trips(self):
-        msgs: list[MessageParam] = [
-            {"role": "user", "content": "q1"},
-            {"role": "assistant", "content": "a1"},
-            {"role": "user", "content": "q2"},
-            {"role": "assistant", "content": "a2"},
+        msgs: list[StoredMessage] = [
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "user", "content": "q1"},
+            },
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "assistant", "content": "a1"},
+            },
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "user", "content": "q2"},
+            },
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "assistant", "content": "a2"},
+            },
         ]
         interactions = build_interactions(msgs)
         assert flatten_interactions(interactions) == msgs
@@ -212,7 +262,7 @@ class TestFirstLine:
 
     def test_only_context_blocks(self):
         text = "---CONTEXT_FILE:[foo.py]---\ncode\n---END---"
-        assert first_line(text) == ""
+        assert first_line(text) == "---CONTEXT_FILE:[foo.py]---"
 
 
 # ---------------------------------------------------------------------------
@@ -243,71 +293,135 @@ class TestFormatBytes:
 
 
 class TestValidateConversation:
-    def test_valid_empty(self, tmp_path):
-        # Empty list is always valid
-        validate_conversation([], tmp_path / "conv.json")
+    def test_valid_empty(self):
+        assert validate_conversation([]) == []
 
-    def test_valid_pair(self, tmp_path):
-        msgs: list[MessageParam] = [
-            {"role": "user", "content": "hi"},
-            {"role": "assistant", "content": "hello"},
+    def test_valid_pair(self):
+        msgs: list[StoredMessage] = [
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "user", "content": "hi"},
+            },
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "assistant", "content": "hello"},
+            },
         ]
-        validate_conversation(msgs, tmp_path / "conv.json")
+        assert validate_conversation(msgs) == []
 
-    def test_non_dict_message_exits(self, tmp_path):
-        with pytest.raises(SystemExit):
-            validate_conversation(cast(Any, ["not a dict"]), tmp_path / "conv.json")
+    def test_non_dict_message_raises(self):
+        with pytest.raises(ConversationError, match="not an object"):
+            validate_conversation(cast(Any, ["not a dict"]))
 
-    def test_missing_role_exits(self, tmp_path):
-        with pytest.raises(SystemExit):
+    def test_missing_mode_raises(self):
+        with pytest.raises(ConversationError, match="missing 'mode'"):
             validate_conversation(
-                cast(Any, [{"content": "hi"}]), tmp_path / "conv.json"
+                cast(Any, [{"message": {"role": "user", "content": "hi"}}])
             )
 
-    def test_missing_content_exits(self, tmp_path):
-        with pytest.raises(SystemExit):
-            validate_conversation(cast(Any, [{"role": "user"}]), tmp_path / "conv.json")
-
-    def test_invalid_role_exits(self, tmp_path):
-        with pytest.raises(SystemExit):
+    def test_invalid_mode_raises(self):
+        with pytest.raises(ConversationError, match="invalid mode"):
             validate_conversation(
-                [{"role": "system", "content": "hi"}], tmp_path / "conv.json"
+                cast(
+                    Any,
+                    [{"mode": "bogus", "message": {"role": "user", "content": "hi"}}],
+                )
             )
 
-    def test_invalid_content_type_exits(self, tmp_path):
-        with pytest.raises(SystemExit):
+    def test_missing_message_raises(self):
+        with pytest.raises(ConversationError, match="missing 'message'"):
+            validate_conversation(cast(Any, [{"mode": InteractionMode.CHAT}]))
+
+    def test_missing_role_raises(self):
+        with pytest.raises(ConversationError, match="missing 'role'"):
             validate_conversation(
-                cast(Any, [{"role": "user", "content": 42}]), tmp_path / "conv.json"
+                cast(
+                    Any, [{"mode": InteractionMode.CHAT, "message": {"content": "hi"}}]
+                )
             )
 
-    def test_first_message_not_user_warns(self, tmp_path, capsys):
-        msgs: list[MessageParam] = [{"role": "assistant", "content": "hi"}]
-        validate_conversation(msgs, tmp_path / "conv.json")
-        assert "warning" in capsys.readouterr().err.lower()
+    def test_missing_content_raises(self):
+        with pytest.raises(ConversationError, match="missing 'content'"):
+            validate_conversation(
+                cast(Any, [{"mode": InteractionMode.CHAT, "message": {"role": "user"}}])
+            )
 
-    def test_consecutive_assistant_warns(self, tmp_path, capsys):
-        msgs: list[MessageParam] = [
-            {"role": "user", "content": "q"},
-            {"role": "assistant", "content": "a1"},
-            {"role": "assistant", "content": "a2"},
+    def test_invalid_role_raises(self):
+        with pytest.raises(ConversationError, match="invalid role"):
+            validate_conversation(
+                [
+                    {
+                        "mode": InteractionMode.CHAT,
+                        "message": {"role": "system", "content": "hi"},
+                    }
+                ]
+            )
+
+    def test_invalid_content_type_raises(self):
+        with pytest.raises(ConversationError, match="must be a string or list"):
+            validate_conversation(
+                cast(
+                    Any,
+                    [
+                        {
+                            "mode": InteractionMode.CHAT,
+                            "message": {"role": "user", "content": 42},
+                        }
+                    ],
+                )
+            )
+
+    def test_first_message_not_user_warns(self):
+        msgs: list[StoredMessage] = [
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "assistant", "content": "hi"},
+            }
         ]
-        validate_conversation(msgs, tmp_path / "conv.json")
-        assert "warning" in capsys.readouterr().err.lower()
+        warnings = validate_conversation(msgs)
+        assert any("first message" in w for w in warnings)
 
-    def test_consecutive_user_does_not_warn(self, tmp_path, capsys):
-        msgs: list[MessageParam] = [
-            {"role": "user", "content": "q1"},
-            {"role": "user", "content": "q2"},
+    def test_consecutive_assistant_warns(self):
+        msgs: list[StoredMessage] = [
+            {"mode": InteractionMode.CHAT, "message": {"role": "user", "content": "q"}},
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "assistant", "content": "a1"},
+            },
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "assistant", "content": "a2"},
+            },
         ]
-        validate_conversation(msgs, tmp_path / "conv.json")
-        assert "warning" not in capsys.readouterr().err.lower()
+        warnings = validate_conversation(msgs)
+        assert any("consecutive" in w for w in warnings)
 
-    def test_content_as_list_is_valid(self, tmp_path):
+    def test_consecutive_user_does_not_warn(self):
+        msgs: list[StoredMessage] = [
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "user", "content": "q1"},
+            },
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {"role": "user", "content": "q2"},
+            },
+        ]
+        warnings = validate_conversation(msgs)
+        assert warnings == []
+
+    def test_content_as_list_is_valid(self):
         # Anthropic supports list content blocks (e.g. tool use)
-        msgs: list[MessageParam] = [
-            {"role": "user", "content": [{"type": "text", "text": "hi"}]}
+        msgs: list[StoredMessage] = [
+            {
+                "mode": InteractionMode.CHAT,
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "hi"}],
+                },
+            }
         ]
-        validate_conversation(msgs, tmp_path / "conv.json")
+        assert validate_conversation(msgs) == []
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +435,9 @@ class TestLoadConversation:
 
     def test_valid_file(self, tmp_path):
         p = tmp_path / "conv.json"
-        msgs: list[MessageParam] = [{"role": "user", "content": "hi"}]
+        msgs: list[StoredMessage] = [
+            {"mode": InteractionMode.CHAT, "message": {"role": "user", "content": "hi"}}
+        ]
         save_conversation(msgs, p)
         assert load_conversation(p) == msgs
 

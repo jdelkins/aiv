@@ -210,21 +210,18 @@ class PipelineContext:
             InteractionMode.CUSTOM
         )  # directly set backing var, bypass mode.setter
 
-    def __repr__(self) -> str:
-        from rich.console import Console
+    def print_summary(self, console):
         from rich.table import Table
         import io
+        import os
 
-        table = Table(
-            title="Runtime Parameters", show_header=False, box=None, padding=(0, 1)
-        )
-        table.add_column("field", style="bold cyan", no_wrap=True)
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column("field", style="cyan", no_wrap=True)
         table.add_column("value", style="white")
 
         try:
-            mode_suffix = self.mode_suffix
             mode_suffix_display = (
-                repr(mode_suffix) if mode_suffix else "[dim]<empty>[/dim]"
+                repr(self.mode_suffix) if self.mode_suffix else "[dim]<empty>[/dim]"
             )
         except FileNotFoundError:
             mode_suffix_display = "[dim]<config not found>[/dim]"
@@ -245,6 +242,8 @@ class PipelineContext:
             ("interactive", str(self.interactive)),
             ("piped_stdin", str(self.piped_stdin)),
             ("api_key", "***" if self.api_key else "[dim]<empty>[/dim]"),
+            ("working_dir", str(os.getcwd())),
+            ("conv_path", str(self.conv_path)),
             (
                 "conv_path_override",
                 (
@@ -258,10 +257,10 @@ class PipelineContext:
         for field, value in rows:
             table.add_row(field, value)
 
-        buf = io.StringIO()
-        console = Console(file=buf, highlight=False)
+        console.print("\n [bold blue]Runtime Parameters[/bold blue]\n")
+        # console.print(" [bold blue]==================[/bold blue]")
         console.print(table)
-        return buf.getvalue().rstrip()
+        console.print("")
 
     def consume_stdin(self) -> str | None:
         """Return stdin_data and clear it so it is only consumed once."""

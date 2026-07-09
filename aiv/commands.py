@@ -442,11 +442,11 @@ def cmd_set_prompt_suffix(cmd: SetPromptSuffixCommand, ctx: PipelineContext):
 
 
 def cmd_help():
-    table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
+    table = Table(show_header=False, box=None, padding=(0, 2, 0, 1))
     table.add_column(style="cyan", no_wrap=True)
     table.add_column(style="dim")
 
-    console.print("\n[bold cyan]aiv REPL commands[/bold cyan]\n")
+    console.print("\n [bold blue]aiv REPL commands[/bold blue]\n")
     for spec in COMMAND_SPECS:
         if not spec.names:
             continue  # skip the bare-prompt pseudo-spec
@@ -456,7 +456,7 @@ def cmd_help():
         table.add_row(full_usage, spec.help)
     console.print(table)
     console.print(
-        "\n  [dim]Alt-Enter (or Escape then Enter) submits a prompt "
+        "\n [dim]Alt-Enter (or Escape then Enter) submits a prompt "
         "(allows multiline input with Enter)[/dim]\n"
     )
 
@@ -475,7 +475,7 @@ def cmd_version():
 
 
 def cmd_pipeline_context(ctx):
-    console.print(f"{ctx}\n")
+    ctx.print_summary(console)
 
 
 # ---------------------------------------------------------------------------

@@ -147,15 +147,17 @@ def looks_like_markdown(text: str) -> bool:
     return False
 
 
-def render_output(text: str, ctx: PipelineContext) -> None:
+def render_output(text: str, mode: InteractionMode, ctx: PipelineContext) -> None:
     """
     Canonical output renderer: rich Markdown for markdown content, raw print
     for code mode or plain text.
     """
-    if ctx.mode != InteractionMode.CODE and looks_like_markdown(text):
-        console.print(Markdown(text))
-        return
-    console.print(escape(text))
+    printer = lambda s: console.print(escape(s))
+    if not ctx.interactive and mode == InteractionMode.CODE:
+        printer = print
+    if mode != InteractionMode.CODE and looks_like_markdown(text):
+        printer = lambda s: console.print(Markdown(s))
+    printer(text)
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +169,7 @@ def print_history_table(interactions: list[list[StoredMessage]], start: int, end
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("#", style="dim", width=4, justify="right")
     table.add_column("Role", width=10)
-    table.add_column("Mode", width=10)
+    table.add_column("Mode", width=8)
     table.add_column("Context", width=14, justify="right")
     table.add_column("First Line")
 
@@ -271,10 +273,10 @@ def cmd_show(cmd: ShowCommand, ctx: PipelineContext):
             info.print(
                 f"\n[bold {role_style}]--- {role} (interaction {num}) ---[/bold {role_style}]"
             )
-            if raw_mode or mode == InteractionMode.CODE:
-                console.print(escape(content_str))
+            if raw_mode:
+                print(content_str)
             else:
-                render_output(content_str, ctx)
+                render_output(content_str, mode, ctx)
 
 
 def cmd_delete(cmd: DeleteCommand, ctx: PipelineContext):
@@ -419,7 +421,7 @@ def cmd_prompt(cmd: PromptCommand, ctx: PipelineContext):
         info.print(f"[red]aiv: {escape(str(e))}[/red]")
         return
 
-    render_output(response_text, ctx)
+    render_output(response_text, ctx.mode, ctx)
 
 
 def cmd_set_model(cmd: SetModelCommand, ctx: PipelineContext):
@@ -510,10 +512,26 @@ def parse_command(text: str) -> Command:
 
     spec = COMMAND_LOOKUP.get(name)
     if spec is None:
-        info.print(
-            f"[red]Unknown command: {escape(name)}. Type !help for available commands.[/red]"
-        )
-        return NoOpCommand()
+        # Prefix matching: find all registered names that start with the typed name
+        matches = {
+            registered: COMMAND_LOOKUP[registered]
+            for registered in COMMAND_LOOKUP
+            if registered.startswith(name)
+        }
+        if len(matches) == 1:
+            spec = next(iter(matches.values()))
+        elif len(matches) > 1:
+            # Ambiguous prefix — list the candidates so the user knows what to  type
+            candidates = ", ".join(sorted(matches.keys()))
+            info.print(
+                f"[yellow]Ambiguous command: {escape(name)} matches {candidates}[/yellow]"
+            )
+            return NoOpCommand()
+        else:
+            info.print(
+                f"[red]Unknown command: {escape(name)}. Type !help for available commands.[/red]"
+            )
+            return NoOpCommand()
 
     return spec.parse(args)
 

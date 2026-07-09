@@ -198,27 +198,27 @@ PLAIN_TEXT = "just some plain text with no markdown"
 
 class TestRenderOutput:
     def test_plain_text_prints_directly(self, ctx, capsys):
-        render_output(PLAIN_TEXT, ctx)
+        render_output(PLAIN_TEXT, InteractionMode.DEFAULT, ctx)
         out = capsys.readouterr().out
         assert PLAIN_TEXT in out
 
     def test_code_mode_always_prints_directly(self, ctx, capsys):
         ctx.mode = InteractionMode.CODE
-        render_output(MARKDOWN_TEXT, ctx)
+        render_output(MARKDOWN_TEXT, InteractionMode.CODE, ctx)
         assert MARKDOWN_TEXT in capsys.readouterr().out
 
     def test_markdown_rendered_in_chat_mode(self, ctx):
         # rich.console.Console.print should be called for markdown in chat mode
         ctx.mode = InteractionMode.CHAT
         with patch("aiv.commands.console") as mock_console:
-            render_output(MARKDOWN_TEXT, ctx)
+            render_output(MARKDOWN_TEXT, InteractionMode.CHAT, ctx)
             mock_console.print.assert_called_once()
 
     def test_markdown_rendered_in_default_mode(self, ctx):
         # DEFAULT mode should also use rich for markdown
         assert ctx.mode == InteractionMode.DEFAULT
         with patch("aiv.commands.console") as mock_console:
-            render_output(MARKDOWN_TEXT, ctx)
+            render_output(MARKDOWN_TEXT, InteractionMode.DEFAULT, ctx)
             mock_console.print.assert_called_once()
 
     def test_markdown_rendered_in_custom_mode(self, ctx):
@@ -226,7 +226,7 @@ class TestRenderOutput:
         ctx.mode_suffix = "respond tersely"
         assert ctx.mode == InteractionMode.CUSTOM
         with patch("aiv.commands.console") as mock_console:
-            render_output(MARKDOWN_TEXT, ctx)
+            render_output(MARKDOWN_TEXT, InteractionMode.CUSTOM, ctx)
             mock_console.print.assert_called_once()
 
 

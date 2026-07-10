@@ -68,15 +68,17 @@ info = Console(stderr=True)
 # Any single strong pattern match → treat as markdown
 MARKDOWN_STRONG = [
     # fenced code block
-    r"^```",
+    r"^\s*(?:`{3,}|~{3,})[a-zA-Z0-9_\-\+]*\s*$",
     # table separator row
-    r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$",
+    r"^\s*\|?(?:\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?\s*$",
     # markdown link
-    r"\[[^\]]+\]\(https?://[^\)]+\)",
-    # atx heading
-    r"^#{1,6}\s+\S",
+    r"!?\[[^\]]+\]\([^\)\s]+(?:\s+\"[^\"]*\")?\)",
+    # atx heading (h2 or above)
+    r"^#{2,6}\s+\S",
     # blockquote
     r"^\s*>\s+\S",
+    # task lists
+    r"^\s*[\-\*\+]\s+\[[ xX]\]\s+\S+",
 ]
 
 # Three or more weak pattern matches required → treat as markdown
@@ -84,17 +86,19 @@ MARKDOWN_WEAK = [
     # inline code
     r"`[^`]+`",
     # bold
-    r"\*\*[^*]+\*\*",
+    r"\s*\*\*[a-zA-Z0-9_\- ]+\*\*\s*",
+    # emphasized words
+    r"\s*\*[a-zA-Z0-9_\- ]+\*\s*",
     # list item with bold label
-    r"^\s*[-*+]\s+\*\*[^*]+\*\*",
+    r"^\s*[-*+]\s+\*\*[a-zA-Z0-9_\- ]+\*\*",
     # ordered list item with bold label
-    r"^\s*\d+\.\s+\*\*[^*]+\*\*",
+    r"^\s*\d+\.\s+\*\*[a-zA-Z0-9_\- ]+\*\*",
 ]
 
 # If any of these match, skip markdown rendering regardless of other signals
 MARKDOWN_NEVER = [
     r"^---CONTEXT_TXT:",
-    r"^raw code\b",
+    r"^---CONTEXT_FILE:",
 ]
 
 # Tunable thresholds for symbol/digit density heuristic
@@ -125,14 +129,18 @@ def looks_like_markdown(text: str) -> bool:
         for pattern in MARKDOWN_NEVER:
             if re.search(pattern, line):
                 return False
-    if _looks_like_code(text):
-        return False
 
-    # Strong positive signals: any single match is sufficient
+    # Strong positive signals: checked BEFORE code heuristic so that responses
+    # containing headings/fenced blocks/etc. are always treated as markdown,
+    # even if their symbol density is high due to embedded code.
     for line in lines:
         for pattern in MARKDOWN_STRONG:
             if re.search(pattern, line):
                 return True
+
+    # Code density heuristic applied only after strong signals have been ruled out
+    if _looks_like_code(text):
+        return False
 
     # Weak positive signals: require 3 or more hits across distinct lines
     weak_hits = 0
@@ -140,7 +148,7 @@ def looks_like_markdown(text: str) -> bool:
         for pattern in MARKDOWN_WEAK:
             if re.search(pattern, line):
                 weak_hits += 1
-                if weak_hits >= 3:
+                if weak_hits >= 2:
                     return True
                 break  # count at most one weak hit per line
 

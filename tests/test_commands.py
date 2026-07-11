@@ -22,7 +22,7 @@ from aiv.models import (
     SetMaxTokensCommand,
     SetSysPromptCommand,
 )
-from aiv.commands import commands_from_args, render_output
+from aiv.commands import commands_from_args, render_output, StopPipeline
 
 
 # ---------------------------------------------------------------------------
@@ -535,9 +535,14 @@ class TestWorkingDirectory:
 
         ctx.interactive = True
         cmd = WorkingDirectoryCommand(dir=tmp_path)
-        # Should not raise; output goes to info console — just verify no crash
+        # Should raise StopPipeline; output goes to info console — just verify no crash
         # and cwd was updated
-        cmd_working_directory(cmd, ctx)
+        raised = False
+        try:
+            cmd_working_directory(cmd, ctx)
+        except StopPipeline:
+            raised = True
+        assert raised
         assert os.getcwd() == str(tmp_path)
 
     def test_cmd_silent_in_non_interactive_mode(self, ctx, tmp_path):

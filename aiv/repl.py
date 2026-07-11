@@ -48,39 +48,44 @@ def run_repl_loop(ctx: PipelineContext) -> None:
     # Mark context as interactive so cmd_reset/cmd_delete show confirmation prompts
     ctx.interactive = True
 
-    # Resolve history file alongside the conversation file's parent directory
-    # so per-repo history stays with the repo, and global history stays global.
-    history_file = ctx.conv_path.parent / ".aiv-history"
-
-    session = PromptSession(
-        history=FileHistory(str(history_file)),
-        completer=AivCompleter(),
-        complete_while_typing=False,  # Tab-triggered only; live completion is noisy
-    )
-
     cmd_intro()
     if ctx.mode == InteractionMode.DEFAULT:
         cmd_set_mode(SetModeCommand(mode=InteractionMode.CHAT), ctx)
 
     while True:
-        try:
-            text = session.prompt(
-                HTML("<ansicyan>aiv> </ansicyan>"),
-                multiline=True,
-                key_bindings=kb,
-                prompt_continuation="...  ",
-            )
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
+        # Resolve history file alongside the conversation file's parent directory
+        # so per-repo history stays with the repo, and global history stays global.
+        history_file = ctx.conv_path.parent / ".aiv-history"
+        session = PromptSession(
+            history=FileHistory(str(history_file)),
+            completer=AivCompleter(),
+            complete_while_typing=False,  # Tab-triggered only; live completion is noisy
+        )
 
-        if not text.strip():
-            continue
+        while True:
+            try:
+                text = session.prompt(
+                    HTML("<ansicyan>aiv> </ansicyan>"),
+                    multiline=True,
+                    key_bindings=kb,
+                    prompt_continuation="...  ",
+                )
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return
 
-        cmd = parse_command(text)
-        try:
-            run_command(cmd, ctx)
-        except StopPipeline:
-            pass
-        except QuitPipeline:
-            break
+            if not text.strip():
+                continue
+
+            cmd = parse_command(text)
+            try:
+                run_command(cmd, ctx)
+            except StopPipeline:
+                # StopPipeline means: restart the prompt session, but otherwise
+                # maintain the pipeline context. Example: changing working
+                # directory, which should in general use a different prompt
+                # history file.
+                break
+            except QuitPipeline:
+                # QuitPipeline means: we are done, bye
+                return

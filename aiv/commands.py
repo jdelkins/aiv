@@ -223,6 +223,7 @@ def cmd_working_directory(cmd: WorkingDirectoryCommand, ctx: PipelineContext):
             raise StopPipeline()
     if ctx.interactive:
         info.print(f"[green]working_directory set to: {ctx.working_directory}[/green]")
+        raise StopPipeline()
 
 
 def cmd_history(cmd: HistoryCommand, ctx: PipelineContext):

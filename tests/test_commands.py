@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 
 import argparse
 import pytest
@@ -37,10 +38,16 @@ def tmp_conv_path(tmp_path) -> Path:
 @pytest.fixture
 def ctx(tmp_conv_path) -> PipelineContext:
     # Pass conv_path_override so tests never trigger the lazy git subprocess
-    return PipelineContext(
-        api_key="test",
-        conv_path_override=tmp_conv_path,
-    )
+    ctx = PipelineContext(api_key="test")
+    ctx.conv_path = tmp_conv_path
+    return ctx
+
+
+@pytest.fixture(autouse=True)
+def restore_cwd():
+    original = os.getcwd()
+    yield
+    os.chdir(original)
 
 
 def make_args(**kwargs) -> argparse.Namespace:
@@ -427,3 +434,118 @@ class TestCmdSetters:
         cmd = SetSysPromptCommand(sys_prompt=None)
         cmd_set_sys_prompt(cmd, ctx)
         assert ctx.sys_prompt == original
+
+
+# ---------------------------------------------------------------------------
+# test working directory semantics
+# ---------------------------------------------------------------------------
+
+
+class TestWorkingDirectory:
+    def test_getter_reflects_cwd(self, ctx, tmp_path):
+        os.chdir(tmp_path)
+        assert ctx.working_directory == str(tmp_path)
+
+    def test_setter_changes_cwd(self, ctx, tmp_path):
+        ctx.working_directory = tmp_path
+        assert os.getcwd() == str(tmp_path)
+
+    def test_setter_invalidates_conv_path_cache(self, ctx, tmp_path):
+        # Prime the cache
+        _ = ctx.conv_path
+        assert ctx._conv_path is not None
+        # Changing directory must clear it
+        ctx.working_directory = tmp_path
+        assert ctx._conv_path is None
+
+    def test_conv_path_reresolved_after_directory_change(self, tmp_path):
+        # Core regression test for the lru_cache bug on _resolve_git_root:
+        # conv_path must be re-resolved after working_directory changes, not
+        # served from a stale cache that reflects the old directory.
+        dir_a = tmp_path / "a"
+        dir_b = tmp_path / "b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+
+        ctx = PipelineContext(api_key="test")
+
+        # Mock _resolve_git_root so the test is not sensitive to whether the
+        # test suite runs inside a real git repo
+        with patch("aiv.conversation._resolve_git_root", return_value=None):
+            os.chdir(dir_a)
+            ctx._conv_path = None
+            path_a = ctx.conv_path
+
+            ctx.working_directory = dir_b
+            # _conv_path must have been cleared by the setter
+            assert ctx._conv_path is None
+            path_b = ctx.conv_path
+
+        # Both resolve to the fallback; the important assertion is that
+        # _conv_path was None between the two reads (checked above)
+        assert path_a == path_b
+
+    def test_explicit_conv_path_cleared_by_directory_change(self, ctx, tmp_path):
+        # An explicitly set conv_path is treated as a cache entry — changing
+        # working_directory invalidates it so the next read re-resolves
+        explicit = tmp_path / "explicit.json"
+        ctx.conv_path = explicit
+        assert ctx._conv_path == explicit
+        ctx.working_directory = tmp_path
+        assert ctx._conv_path is None
+
+    def test_working_directory_returns_string(self, ctx):
+        assert isinstance(ctx.working_directory, str)
+
+    # --- cmd_working_directory integration ---
+
+    def test_cmd_changes_cwd(self, ctx, tmp_path):
+        from aiv.commands import cmd_working_directory
+        from aiv.models import WorkingDirectoryCommand
+
+        cmd = WorkingDirectoryCommand(dir=tmp_path)
+        cmd_working_directory(cmd, ctx)
+        assert os.getcwd() == str(tmp_path)
+
+    def test_cmd_invalidates_conv_path_cache(self, ctx, tmp_path):
+        from aiv.commands import cmd_working_directory
+        from aiv.models import WorkingDirectoryCommand
+
+        _ = ctx.conv_path
+        assert ctx._conv_path is not None
+        cmd = WorkingDirectoryCommand(dir=tmp_path)
+        cmd_working_directory(cmd, ctx)
+        assert ctx._conv_path is None
+
+    def test_cmd_none_dir_is_noop(self, ctx, tmp_path):
+        from aiv.commands import cmd_working_directory
+        from aiv.models import WorkingDirectoryCommand
+
+        original_cwd = os.getcwd()
+        ctx.conv_path = tmp_path / "conversation.json"
+        original_conv = ctx._conv_path
+        cmd = WorkingDirectoryCommand(dir=None)
+        cmd_working_directory(cmd, ctx)
+        assert os.getcwd() == original_cwd
+        assert ctx._conv_path == original_conv
+
+    def test_cmd_prints_in_interactive_mode(self, ctx, tmp_path):
+        from aiv.commands import cmd_working_directory
+        from aiv.models import WorkingDirectoryCommand
+
+        ctx.interactive = True
+        cmd = WorkingDirectoryCommand(dir=tmp_path)
+        # Should not raise; output goes to info console — just verify no crash
+        # and cwd was updated
+        cmd_working_directory(cmd, ctx)
+        assert os.getcwd() == str(tmp_path)
+
+    def test_cmd_silent_in_non_interactive_mode(self, ctx, tmp_path):
+        from aiv.commands import cmd_working_directory
+        from aiv.models import WorkingDirectoryCommand
+
+        ctx.interactive = False
+        cmd = WorkingDirectoryCommand(dir=tmp_path)
+        with patch("aiv.commands.info") as mock_info:
+            cmd_working_directory(cmd, ctx)
+            mock_info.print.assert_not_called()

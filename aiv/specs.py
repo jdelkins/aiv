@@ -1,4 +1,5 @@
 from __future__ import annotations
+from pathlib import Path
 
 from dataclasses import dataclass, field
 from typing import Callable
@@ -23,6 +24,7 @@ from aiv.models import (
     ShowVersionCommand,
     ShowPipelineContextCommand,
     SetPromptSuffixCommand,
+    WorkingDirectoryCommand,
 )
 
 
@@ -81,6 +83,7 @@ class CommandSpec:
         default_factory=dict
     )  # passed verbatim to add_argument()
     takes_path: bool = False  # completion hint: tab-complete args as filesystem path
+    takes_dir: bool = False  # completion hint: tab-complete args as filesystem dirs
     precedence: int = 50  # pipeline ordering: lower runs earlier; stable sort preserves
     # registry order within equal precedence
 
@@ -97,6 +100,19 @@ class CommandSpec:
 #   90  — REPL handoff (always last; hands off control of the process)
 
 COMMAND_SPECS: list[CommandSpec] = [
+    CommandSpec(
+        names=("!cd",),
+        long_option="--working-directory",
+        short_option="-d",
+        usage="<dir>",
+        help="Set current working directory before running commands",
+        takes_dir=True,
+        parse=lambda args: WorkingDirectoryCommand(
+            dir=Path(args.strip()).expanduser() if args != "" else None
+        ),
+        argparse_kwargs=dict(nargs=1, metavar="dir"),
+        precedence=5,
+    ),
     CommandSpec(
         names=("!reset",),
         long_option="--reset",

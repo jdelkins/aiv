@@ -13,6 +13,11 @@ _PATH_PREFIXES: list[str] = [
     name + " " for spec in COMMAND_SPECS if spec.takes_path for name in spec.names
 ]
 
+# Prefixes that should trigger dir completion, e.g. "!cd "
+_DIR_PREFIXES: list[str] = [
+    name + " " for spec in COMMAND_SPECS if spec.takes_dir for name in spec.names
+]
+
 # Commands that accept an optional range argument — once past command+space,
 # yield nothing rather than polluting with unrelated name completions.
 _RANGE_PREFIXES: list[str] = [
@@ -32,6 +37,7 @@ _MODE_VALUES: list[str] = [m.value for m in InteractionMode] + ["default"]
 class AivCompleter(Completer):
     def __init__(self):
         self._path_completer = PathCompleter(expanduser=True)
+        self._dir_completer = PathCompleter(only_directories=True, expanduser=True)
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
@@ -59,6 +65,14 @@ class AivCompleter(Completer):
                     return
                 sub_doc = Document(remainder, cursor_position=len(remainder))
                 yield from self._path_completer.get_completions(sub_doc, complete_event)
+                return
+
+        # Path completion for commands that take a filesystem argument
+        for prefix in _DIR_PREFIXES:
+            if text.startswith(prefix):
+                remainder = text[len(prefix) :]
+                sub_doc = Document(remainder, cursor_position=len(remainder))
+                yield from self._dir_completer.get_completions(sub_doc, complete_event)
                 return
 
         # Range-taking commands: no useful completions beyond the command name

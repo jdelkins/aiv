@@ -1,6 +1,5 @@
 from __future__ import annotations
 from aiv.models import InteractionMode, ConversationError
-from functools import lru_cache
 import subprocess
 from typing import TypedDict
 
@@ -111,7 +110,6 @@ def count_context_blocks(content: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-@lru_cache(maxsize=None)
 def _resolve_git_root() -> Path | None:
     try:
         result = subprocess.run(

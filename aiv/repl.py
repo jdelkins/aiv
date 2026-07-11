@@ -13,8 +13,9 @@ from aiv.commands import (
     parse_command,
     run_command,
     cmd_intro,
-    QuitPipeline,
     cmd_set_mode,
+    QuitPipeline,
+    StopPipeline,
 )
 from aiv.completion import AivCompleter
 
@@ -79,5 +80,7 @@ def run_repl_loop(ctx: PipelineContext) -> None:
         cmd = parse_command(text)
         try:
             run_command(cmd, ctx)
+        except StopPipeline:
+            pass
         except QuitPipeline:
             break

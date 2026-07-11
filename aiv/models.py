@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 
 from dataclasses import dataclass
 from enum import Enum
@@ -112,6 +113,11 @@ class SetPromptSuffixCommand:
     suffix: str | None
 
 
+@dataclass
+class WorkingDirectoryCommand:
+    dir: Path | None
+
+
 Command = (
     ContextCommand
     | PromptCommand
@@ -130,6 +136,7 @@ Command = (
     | SetPromptSuffixCommand
     | ShowVersionCommand
     | ShowPipelineContextCommand
+    | WorkingDirectoryCommand
 )
 
 
@@ -149,10 +156,8 @@ class PipelineContext:
         max_tokens: int = 4096,
         interactive: bool = False,  # set True by run_repl_loop
         piped_stdin: bool = False,  # True if stdin was a pipe at invocation
-        # conv_path_override: pass an explicit Path (e.g. in tests) to skip auto-resolution.
-        # Leave as None in production — get_conversation_file() is called lazily on first
-        # access to ctx.conv_path, along with load_conversation + validate_conversation.
-        conv_path_override: Path | None = None,
+        # note working directory is maintained in the os environment, no need to
+        # store it here
     ):
         self.model = model
         self.sys_prompt = sys_prompt
@@ -161,7 +166,6 @@ class PipelineContext:
         self.max_tokens = max_tokens
         self.interactive = interactive
         self.piped_stdin = piped_stdin
-        self.conv_path_override = conv_path_override
         self._conv_path: Path | None = None
         self._mode: InteractionMode = InteractionMode.DEFAULT
         # None = "not explicitly set, derive lazily from mode on read"
@@ -174,8 +178,12 @@ class PipelineContext:
         if self._conv_path is None:
             from aiv.conversation import get_conversation_file
 
-            self._conv_path = self.conv_path_override or get_conversation_file()
+            self._conv_path = get_conversation_file()
         return self._conv_path
+
+    @conv_path.setter
+    def conv_path(self, path: Path | None):
+        self._conv_path = path
 
     @property
     def mode(self) -> InteractionMode:
@@ -208,10 +216,17 @@ class PipelineContext:
             InteractionMode.CUSTOM
         )  # directly set backing var, bypass mode.setter
 
+    @property
+    def working_directory(self) -> str:
+        return os.getcwd()
+
+    @working_directory.setter
+    def working_directory(self, cwd: Path) -> None:
+        os.chdir(cwd)
+        self._conv_path = None
+
     def print_summary(self, console):
         from rich.table import Table
-        import io
-        import os
 
         table = Table(show_header=False, box=None, padding=(0, 1))
         table.add_column("field", style="cyan", no_wrap=True)
@@ -240,16 +255,8 @@ class PipelineContext:
             ("interactive", str(self.interactive)),
             ("piped_stdin", str(self.piped_stdin)),
             ("api_key", "***" if self.api_key else "[dim]<empty>[/dim]"),
-            ("working_dir", str(os.getcwd())),
+            ("working_directory", str(self.working_directory)),
             ("conv_path", str(self.conv_path)),
-            (
-                "conv_path_override",
-                (
-                    str(self.conv_path_override)
-                    if self.conv_path_override
-                    else "[dim]<empty>[/dim]"
-                ),
-            ),
         ]
 
         for field, value in rows:

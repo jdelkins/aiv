@@ -45,6 +45,7 @@ from aiv.models import (
     PipelineContext,
     ShowVersionCommand,
     ShowPipelineContextCommand,
+    WorkingDirectoryCommand,
 )
 from aiv.specs import (
     COMMAND_SPECS,
@@ -211,6 +212,17 @@ def print_history_table(interactions: list[list[StoredMessage]], start: int, end
 # ---------------------------------------------------------------------------
 # Command implementations
 # ---------------------------------------------------------------------------
+
+
+def cmd_working_directory(cmd: WorkingDirectoryCommand, ctx: PipelineContext):
+    if cmd.dir is not None:
+        try:
+            ctx.working_directory = cmd.dir
+        except FileNotFoundError as e:
+            info.print(f"[red]Invalid directory: {escape(str(e))}")
+            raise StopPipeline()
+    if ctx.interactive:
+        info.print(f"[green]working_directory set to: {ctx.working_directory}[/green]")
 
 
 def cmd_history(cmd: HistoryCommand, ctx: PipelineContext):
@@ -606,9 +618,15 @@ class QuitPipeline(Exception):
     pass
 
 
+class StopPipeline(Exception):
+    pass
+
+
 def run_command(cmd: Command, ctx: PipelineContext) -> None:
     """Execute a single command. Raises QuitPipeline on ExitCommand."""
-    if isinstance(cmd, ContextCommand):
+    if isinstance(cmd, WorkingDirectoryCommand):
+        cmd_working_directory(cmd, ctx)
+    elif isinstance(cmd, ContextCommand):
         cmd_context(cmd, ctx)
     elif isinstance(cmd, PromptCommand):
         cmd_prompt(cmd, ctx)
@@ -656,6 +674,8 @@ def run_pipeline(commands: list[Command], ctx: PipelineContext) -> None:
         info.print(
             f"[red]aiv: Conversation file is invalid. Please reset it. Error: {escape(str(e))}[/red]"
         )
+        sys.exit(1)
+    except StopPipeline:
         sys.exit(1)
     except QuitPipeline:
         pass

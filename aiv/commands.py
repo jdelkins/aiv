@@ -174,6 +174,19 @@ def render_output(text: str, mode: InteractionMode, ctx: PipelineContext) -> Non
 # ---------------------------------------------------------------------------
 
 
+def print_info(s: str) -> None:
+    info.print(s)
+
+
+def get_interaction_count(ctx: PipelineContext) -> int | None:
+    """Returns None if the file is unreadable or malformed."""
+    try:
+        messages = load_conversation(ctx.conv_path)
+        return len(build_interactions(messages))
+    except (ConversationError, OSError):
+        return None
+
+
 def print_history_table(interactions: list[list[StoredMessage]], start: int, end: int):
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("#", style="dim", width=4, justify="right")

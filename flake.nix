@@ -32,6 +32,7 @@
                 prompt-toolkit
                 rich
                 pytest
+                filelock
               ]
             ))
           ];

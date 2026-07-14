@@ -110,6 +110,7 @@ in
 
     programs.git.ignores = [
       ".aiv-conversation.json" # conversation state
+      ".aiv-conversation.lock" # conversation lock file
       ".aiv-history" # repl history file
     ];
 

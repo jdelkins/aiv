@@ -1,5 +1,6 @@
 /.direnv
 /result
 /.aiv-conversation.json
+/.aiv-conversation.lock
 /.aiv-history
 __pycache__

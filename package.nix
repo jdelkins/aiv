@@ -26,6 +26,7 @@ python3Packages.buildPythonApplication {
     anthropic
     prompt-toolkit
     rich
+    filelock
   ];
 
   nativeBuildInputs = [

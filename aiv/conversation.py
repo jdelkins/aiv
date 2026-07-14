@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from anthropic.types import MessageParam
+from filelock import BaseFileLock, FileLock
 
 from aiv.config import FALLBACK_CONVERSATION_FILE
 
@@ -141,55 +142,77 @@ def get_conversation_file() -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Locking
+# ---------------------------------------------------------------------------
+
+
+def _conv_lock(path: Path, lock: BaseFileLock | None) -> BaseFileLock:
+    """Return the provided lock if given, otherwise create a new one for path."""
+    return lock if lock is not None else FileLock(path.with_suffix(".lock"))
+
+
+# ---------------------------------------------------------------------------
 # Load / save / reset
 # ---------------------------------------------------------------------------
 
 
-def load_conversation(path: Path) -> list[StoredMessage]:
+def load_conversation(
+    path: Path, lock: BaseFileLock | None = None
+) -> list[StoredMessage]:
     """
     Read conversation JSON from disk. Returns [] if the file does not exist.
     Raises SystemExit on malformed JSON — callers should treat this as fatal
     since we never want to silently overwrite a user's conversation file.
+    If lock is provided (and already acquired by the caller) it is re-acquired
+    via filelock's reentrant counter rather than creating a new lock object.
     """
-    if not path.exists():
-        return []
-    try:
-        data = json.loads(path.read_text())
-    except json.JSONDecodeError as e:
-        print(
-            f"aiv: conversation file is not valid JSON: {path}\n  {e}", file=sys.stderr
-        )
-        sys.exit(1)
+    with _conv_lock(path, lock):
+        if not path.exists():
+            return []
+        try:
+            data = json.loads(path.read_text())
+        except json.JSONDecodeError as e:
+            print(
+                f"aiv: conversation file is not valid JSON: {path}\n  {e}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
-    if not isinstance(data, dict):
-        print(f"aiv: conversation file must be a JSON object: {path}", file=sys.stderr)
-        sys.exit(1)
+        if not isinstance(data, dict):
+            print(
+                f"aiv: conversation file must be a JSON object: {path}", file=sys.stderr
+            )
+            sys.exit(1)
 
-    if "messages" not in data:
-        # Tolerate an empty/keyless object — treat as empty conversation
-        print(
-            f"aiv: warning: conversation file has no 'messages' key, treating as empty: {path}",
-            file=sys.stderr,
-        )
-        return []
+        if "messages" not in data:
+            # Tolerate an empty/keyless object — treat as empty conversation
+            print(
+                f"aiv: warning: conversation file has no 'messages' key, treating as empty: {path}",
+                file=sys.stderr,
+            )
+            return []
 
-    messages = data["messages"]
-    if not isinstance(messages, list):
-        print(
-            f"aiv: conversation file 'messages' must be a list: {path}", file=sys.stderr
-        )
-        sys.exit(1)
+        messages = data["messages"]
+        if not isinstance(messages, list):
+            print(
+                f"aiv: conversation file 'messages' must be a list: {path}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
-    warnings = validate_conversation(messages)
-    for w in warnings:
-        print(f"aiv: conversation file {path}: {w}", file=sys.stderr)
+        warnings = validate_conversation(messages)
+        for w in warnings:
+            print(f"aiv: conversation file {path}: {w}", file=sys.stderr)
 
-    return messages
+        return messages
 
 
-def save_conversation(messages: list[StoredMessage], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"messages": messages}, indent=2))
+def save_conversation(
+    messages: list[StoredMessage], path: Path, lock: BaseFileLock | None = None
+) -> None:
+    with _conv_lock(path, lock):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"messages": messages}, indent=2))
 
 
 def reset_conversation(path: Path) -> None:
@@ -267,10 +290,13 @@ def append_user_turn(
 ) -> list[StoredMessage]:
     """
     Append a user message to the conversation file and return the updated list.
+    Holds a single exclusive lock across the read-modify-write to prevent races.
     """
-    messages = load_conversation(path)
-    messages.append({"mode": mode, "message": {"role": "user", "content": content}})
-    save_conversation(messages, path)
+    lock: BaseFileLock = FileLock(path.with_suffix(".lock"))
+    with lock:
+        messages = load_conversation(path, lock=lock)
+        messages.append({"mode": mode, "message": {"role": "user", "content": content}})
+        save_conversation(messages, path, lock=lock)
     return messages
 
 

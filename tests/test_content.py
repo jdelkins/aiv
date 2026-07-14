@@ -22,20 +22,13 @@ class TestBuildUserContent:
         assert result == "hello [code]"
 
     def test_stdin_data_adds_context_block(self):
-        with patch("aiv.content.find_file_location", return_value=""):
-            result = build_user_content("my prompt", [], "some stdin")
-        assert "---CONTEXT_TXT:---" in result
+        result = build_user_content("my prompt", [], "some stdin")
+        assert "---CONTEXT_TXT---" in result
         assert "some stdin" in result
         assert "my prompt" in result
 
-    def test_stdin_data_location_hint(self):
-        with patch("aiv.content.find_file_location", return_value="[foo.py:1:5]"):
-            result = build_user_content("prompt", [], "data")
-        assert "---CONTEXT_TXT:[foo.py:1:5]---" in result
-
     def test_stdin_data_prompt_appears_after_block(self):
-        with patch("aiv.content.find_file_location", return_value=""):
-            result = build_user_content("my prompt", [], "stdin content")
+        result = build_user_content("my prompt", [], "stdin content")
         # prompt must appear after the ---END--- closing the stdin block
         end_pos = result.index("---END---")
         prompt_pos = result.index("my prompt")
@@ -43,8 +36,7 @@ class TestBuildUserContent:
 
     def test_dash_sentinel_skipped_in_context_files(self):
         # "-" in context_files should be ignored; stdin_data is the mechanism
-        with patch("aiv.content.find_file_location", return_value=""):
-            result = build_user_content("prompt", ["-"], None)
+        result = build_user_content("prompt", ["-"], None)
         assert "---CONTEXT_FILE:" not in result
         assert result == "prompt"
 
@@ -79,6 +71,5 @@ class TestBuildUserContent:
         assert a_pos < b_pos
 
     def test_mode_suffix_appended_to_prompt_with_stdin(self):
-        with patch("aiv.content.find_file_location", return_value=""):
-            result = build_user_content("prompt", [], "stdin", mode_suffix=" SUFFIX")
+        result = build_user_content("prompt", [], "stdin", mode_suffix=" SUFFIX")
         assert result.endswith("prompt SUFFIX")

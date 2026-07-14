@@ -26,50 +26,6 @@ def _find_repo_root() -> Path | None:
     return None
 
 
-def find_file_location(content: str) -> str:
-    """
-    Attempt to locate content within the repo (or cwd) using grep.
-    Returns a location hint string like '[path/to/file.py:12:34]' or ''.
-    Runs on every stdin-bearing prompt — kept as-is per design decision.
-    """
-    lines = [l for l in content.splitlines() if len(l.strip()) > 5]
-    if not lines:
-        return ""
-    pattern = "\n".join(lines)
-    counts: dict[str, int] = {}
-    try:
-        if _find_repo_root() is not None:
-            cmd = ["git", "grep", "-Fnf", "-"]
-        else:
-            cmd = ["grep", "-rFnf", "-", "."]
-        result = subprocess.run(
-            cmd,
-            input=pattern,
-            capture_output=True,
-            text=True,
-        )
-        for line in result.stdout.splitlines():
-            fname = line.split(":")[0]
-            counts[fname] = counts.get(fname, 0) + 1
-    except Exception:
-        return ""
-    if not counts:
-        return ""
-    best_file = max(counts, key=lambda k: counts[k])
-    first_ln = lines[0]
-    try:
-        result2 = subprocess.run(
-            ["grep", "-Fn", first_ln, best_file], capture_output=True, text=True
-        )
-        if result2.stdout:
-            ln_s = int(result2.stdout.split(":")[0])
-            ln_e = ln_s + len(lines) - 1
-            return f"[{best_file}:{ln_s}:{ln_e}]"
-    except Exception:
-        pass
-    return f"[{best_file}]"
-
-
 # ---------------------------------------------------------------------------
 # User message content builder
 # ---------------------------------------------------------------------------
@@ -92,8 +48,8 @@ def build_user_content(
     ---CONTEXT_FILE:[path]--- / ---END--- envelope; stdin uses
     ---CONTEXT_TXT:[location_hint]--- / ---END---.
 
-    If stdin_ctx_file is provided the grep-based find_file_location() is
-    skipped entirely and the supplied file/range are used to build the hint.
+    If stdin_ctx_file is provided the file/range are used to build the hint,
+    if provided.
     """
     parts = []
 
@@ -108,15 +64,13 @@ def build_user_content(
             parts.append("---END---")
 
     if stdin_data is not None:
-        # loc = find_file_location(stdin_data)
+        loc = ""
         if stdin_ctx_file is not None:
             if stdin_ctx_range is not None:
-                loc = f"[{stdin_ctx_file}:{stdin_ctx_range}]"
+                loc = f":[{stdin_ctx_file}:{stdin_ctx_range}]"
             else:
-                loc = f"[{stdin_ctx_file}]"
-        else:
-            loc = find_file_location(stdin_data)
-        parts.append(f"---CONTEXT_TXT:{loc}---")
+                loc = f":[{stdin_ctx_file}]"
+        parts.append(f"---CONTEXT_TXT{loc}---")
         parts.append(stdin_data)
         parts.append("---END---")
         parts.append(prompt + mode_suffix)

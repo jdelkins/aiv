@@ -10,7 +10,6 @@ location detection.
 - **Editor-optimized design** for seamless integration with Helix and other editors
 - **Terminal-friendly interface** for command-line workflows and automation
 - **Interactive REPL** (`aiv -i`) for conversational sessions with history management
-- **Smart context detection** that automatically identifies source files and line locations
 - **Per-project conversation state** scoped to the current git repository
 - **Pipe-friendly interface** that works with any Unix tool
 - **Flexible input handling** supporting files, globs, and stdin
@@ -428,15 +427,6 @@ consumed by another tool.
 
 When using `-i` (REPL mode), the chosen mode flag applies to every turn in the
 session. If neither `-C` nor `-X` is given, `-C` is the default for REPL sessions.
-
-### Smart Location Detection
-
-When you pipe code through AIV, it automatically:
-- Identifies the source file using content matching
-- Finds the exact line range in the file
-- Adds location context like `[src/main.rs:45:67]`
-
-This helps the AI provide more precise, location-aware assistance.
 
 ### Context-Only Mode
 

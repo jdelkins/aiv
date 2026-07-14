@@ -9,6 +9,17 @@
 
 let
   pyproject = lib.importTOML ./pyproject.toml;
+  nameOverrides = { };
+
+  parseName = dep: builtins.head (builtins.match "([A-Za-z0-9_.-]+).*" dep);
+
+  pyDeps = map (
+    dep:
+    let
+      name = parseName dep;
+    in
+    python3Packages.${nameOverrides.${name} or name}
+  ) pyproject.project.dependencies;
 in
 
 python3Packages.buildPythonApplication {
@@ -22,12 +33,7 @@ python3Packages.buildPythonApplication {
     setuptools
   ];
 
-  dependencies = with python3Packages; [
-    anthropic
-    prompt-toolkit
-    rich
-    filelock
-  ];
+  dependencies = pyDeps;
 
   nativeBuildInputs = [
     git

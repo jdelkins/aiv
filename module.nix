@@ -137,7 +137,7 @@ in
         select = keys;
         normal = keys;
         insert."A-p" = [
-          ":insert-output printf '%s' '${cfg.promptMarker} '"
+          ":insert-output printf '%%s' '${cfg.promptMarker} '"
           "move_char_right"
         ];
       }

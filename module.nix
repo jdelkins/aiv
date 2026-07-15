@@ -126,7 +126,7 @@ in
       let
         aiv = lib.getExe cfg.package;
         keys.space.v = {
-          r = ":pipe ${aiv} -X -e 'stdin,file=%{buffer_name},range='%{selection_line_start}:%{selection_line_end}'"; # replace selection
+          r = ":pipe ${aiv} -X -e 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"; # replace selection
           c = ":pipe-to ${aiv} -X -c 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"; # load selection as context, no output
           C = ":pipe-to ${aiv} -X -R -c 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"; # load selection as context, resetting conversation, no output
           R = ":run-shell-command echo '' | ${aiv} -X -R"; # reset conversation

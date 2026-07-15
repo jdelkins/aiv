@@ -180,7 +180,7 @@ def run_repl_loop(ctx: PipelineContext) -> None:
 
                 try:
                     text = session.prompt(
-                        HTML("<ansicyan>aiv> </ansicyan>"),
+                        HTML("\n<ansicyan>aiv> </ansicyan>"),
                         multiline=True,
                         key_bindings=kb,
                         prompt_continuation="...  ",

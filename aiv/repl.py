@@ -245,6 +245,7 @@ def run_repl_loop(ctx: PipelineContext) -> None:
                     # file are not mistaken for external changes. The exception
                     # (StopPipeline, QuitPipeline, etc.) propagates naturally
                     # after the finally block completes.
+                    last_seen_count = get_interaction_count(ctx) or 0
                     try:
                         with baseline_lock:
                             baseline[0] = ctx.conv_path.stat().st_mtime

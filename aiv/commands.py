@@ -455,6 +455,11 @@ def cmd_prompt(cmd: PromptCommand, ctx: PipelineContext):
         info.print(f"[red]aiv: {escape(str(e))}[/red]")
         return
 
+    if ctx.interactive:
+        inum = get_interaction_count(ctx) or "UNKNOWN"
+        info.print("")
+        info.print(f"[magenta]--- assistant (interaction {inum}) ---[/magenta]")
+        info.print("")
     render_output(response_text, ctx.mode, ctx)
 
 

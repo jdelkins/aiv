@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from aiv.config import get_config
+from aiv.config import get_config, DEFAULT_PROMPT_MARKER
 
 
 class InteractionMode(str, Enum):
@@ -14,10 +14,8 @@ class InteractionMode(str, Enum):
     DEFAULT = "default"
 
 
-# Exception class — add to conversation.py (or a dedicated exceptions.py)
 class ConversationError(Exception):
     """Raised when a conversation file fails structural validation."""
-
     pass
 
 
@@ -28,9 +26,16 @@ class ConversationError(Exception):
 
 @dataclass
 class ContextCommand:
-    path: str  # glob pattern or "-" for stdin
-    ctx_file: str | None = None  # use as location hint
-    ctx_range: str | None = None  # line range, e.g. "45:67"
+    path: str
+    ctx_file: str | None = None
+    ctx_range: str | None = None
+
+
+@dataclass
+class ExtractPromptContextCommand:
+    path: str
+    ctx_file: str | None = None
+    ctx_range: str | None = None
 
 
 @dataclass
@@ -114,12 +119,18 @@ class SetPromptSuffixCommand:
 
 
 @dataclass
+class SetPromptMarkerCommand:
+    marker: str | None
+
+
+@dataclass
 class WorkingDirectoryCommand:
     dir: Path | None
 
 
 Command = (
     ContextCommand
+    | ExtractPromptContextCommand
     | PromptCommand
     | HistoryCommand
     | ShowCommand
@@ -134,6 +145,7 @@ Command = (
     | SetSysPromptCommand
     | SetModeCommand
     | SetPromptSuffixCommand
+    | SetPromptMarkerCommand
     | ShowVersionCommand
     | ShowPipelineContextCommand
     | WorkingDirectoryCommand
@@ -154,10 +166,8 @@ class PipelineContext:
         stdin_data: str | None = None,
         api_key: str = "",
         max_tokens: int = 4096,
-        interactive: bool = False,  # set True by run_repl_loop
-        piped_stdin: bool = False,  # True if stdin was a pipe at invocation
-        # note working directory is maintained in the os environment, no need to
-        # store it here
+        interactive: bool = False,
+        piped_stdin: bool = False,
     ):
         self.model = model
         self.sys_prompt = sys_prompt
@@ -168,16 +178,18 @@ class PipelineContext:
         self.piped_stdin = piped_stdin
         self._conv_path: Path | None = None
         self._mode: InteractionMode = InteractionMode.DEFAULT
-        # None = "not explicitly set, derive lazily from mode on read"
-        # str  = "explicitly overridden, use as-is"
         self._mode_suffix: str | None = None
-        self.mode = mode  # run through setter to set _mode (suffix stays None)
+        self.mode = mode
+
+        try:
+            self.prompt_marker: str = get_config().get("prompt_marker", DEFAULT_PROMPT_MARKER)
+        except FileNotFoundError:
+            self.prompt_marker = DEFAULT_PROMPT_MARKER
 
     @property
     def conv_path(self) -> Path:
         if self._conv_path is None:
             from aiv.conversation import get_conversation_file
-
             self._conv_path = get_conversation_file()
         return self._conv_path
 
@@ -192,18 +204,14 @@ class PipelineContext:
     @mode.setter
     def mode(self, value: InteractionMode) -> None:
         self._mode = value
-        self._mode_suffix = None  # clear override; getter will derive from mode lazily
+        self._mode_suffix = None
 
     @property
     def mode_suffix(self) -> str:
         if self._mode_suffix is not None:
             return self._mode_suffix
-        # DEFAULT and CUSTOM have no config-derived suffix — return early to
-        # avoid calling get_config() in environments without a config file.
         if self._mode not in (InteractionMode.CODE, InteractionMode.CHAT):
             return ""
-        # Raises FileNotFoundError — callers at the CLI boundary handle it with
-        # sys.exit; __repr__ and tests catch it gracefully without calling sys.exit.
         config = get_config()
         if self._mode == InteractionMode.CODE:
             return config.get("mode_code_suffix", "")
@@ -212,9 +220,7 @@ class PipelineContext:
     @mode_suffix.setter
     def mode_suffix(self, value: str) -> None:
         self._mode_suffix = value
-        self._mode = (
-            InteractionMode.CUSTOM
-        )  # directly set backing var, bypass mode.setter
+        self._mode = InteractionMode.CUSTOM
 
     @property
     def working_directory(self) -> str:
@@ -257,18 +263,17 @@ class PipelineContext:
             ("api_key", "***" if self.api_key else "[dim]<empty>[/dim]"),
             ("working_directory", str(self.working_directory)),
             ("conv_path", str(self.conv_path)),
+            ("prompt_marker", repr(self.prompt_marker)),
         ]
 
         for field, value in rows:
             table.add_row(field, value)
 
         console.print("\n [bold blue]Runtime Parameters[/bold blue]\n")
-        # console.print(" [bold blue]==================[/bold blue]")
         console.print(table)
         console.print("")
 
     def consume_stdin(self) -> str | None:
-        """Return stdin_data and clear it so it is only consumed once."""
         data = self.stdin_data
         self.stdin_data = None
         return data

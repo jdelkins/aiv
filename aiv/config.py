@@ -20,9 +20,10 @@ DEFAULT_SYS_PROMPT = (
 )
 DEFAULT_MODE_CHAT_SUFFIX = "This is a conversational message. Respond using markdown formatting including triple backticks where it aids readability."
 DEFAULT_MODE_CODE_SUFFIX = (
-    "Respond with raw CODE ONLY. No markdown, no triple backtick code fences. Preserve input formatting. "
+    "Respond with raw CODE ONLY. No markdown, no triple backtick code fences. Preserve input formatting and, especially, line-leading whitespace. "
     "If you have important caveats, assumptions, clarification requests, or usage nuances, include them as code comments."
 )
+DEFAULT_PROMPT_MARKER = "## prompt:"
 
 
 def _normalise_suffix(value: str) -> str:
@@ -42,10 +43,8 @@ def get_version() -> str:
 def get_config() -> dict:
     if not CONFIG_FILE.exists():
         raise FileNotFoundError(f"aiv: config file not found: {CONFIG_FILE}")
-    # tomllib requires binary mode; available stdlib Python 3.11+
     with open(CONFIG_FILE, "rb") as f:
         config = tomllib.load(f)
-    # resolve api_key from api_key_file if api_key is not directly provided
     if "api_key" not in config and "api_key_file" in config:
         key_file = Path(config.pop("api_key_file")).expanduser()
         if not key_file.exists():
@@ -53,15 +52,14 @@ def get_config() -> dict:
         config["api_key"] = key_file.read_text().strip()
     elif "api_key_file" in config:
         config.pop("api_key_file")
-    # normalise sys_prompt alias
     if "system_prompt" in config and "sys_prompt" not in config:
         config["sys_prompt"] = config.pop("system_prompt")
     config.setdefault("sys_prompt", DEFAULT_SYS_PROMPT)
-    # apply defaults and normalise mode suffixes (ensure \n\n prefix)
     config["mode_chat_suffix"] = _normalise_suffix(
         config.get("mode_chat_suffix", DEFAULT_MODE_CHAT_SUFFIX)
     )
     config["mode_code_suffix"] = _normalise_suffix(
         config.get("mode_code_suffix", DEFAULT_MODE_CODE_SUFFIX)
     )
+    config.setdefault("prompt_marker", DEFAULT_PROMPT_MARKER)
     return config

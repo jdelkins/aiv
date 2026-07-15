@@ -86,9 +86,10 @@ def main():
     # ---------------------------------------------------------------------------
     stdin_is_tty = sys.stdin.isatty()
     context_files = getattr(args, "context", []) or []
+    extract_files = getattr(args, "extract", []) or []
     has_explicit_stdin_context = any(
         c == "-" or c.startswith("-,") or c == "stdin" or c.startswith("stdin,")
-        for c in context_files
+        for c in context_files + extract_files
     )
     stdin_data: str | None = None
 

@@ -3,6 +3,7 @@ from aiv.config import get_version
 import glob
 import re
 import sys
+from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 from rich.markdown import Markdown
@@ -28,6 +29,7 @@ from aiv.models import (
     InteractionMode,
     Command,
     ContextCommand,
+    ExtractPromptContextCommand,
     PromptCommand,
     HistoryCommand,
     ShowCommand,
@@ -42,6 +44,7 @@ from aiv.models import (
     SetSysPromptCommand,
     SetModeCommand,
     SetPromptSuffixCommand,
+    SetPromptMarkerCommand,
     PipelineContext,
     ShowVersionCommand,
     ShowPipelineContextCommand,
@@ -220,6 +223,41 @@ def print_history_table(interactions: list[list[StoredMessage]], start: int, end
             num = ""
 
     console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# Extract helpers
+# ---------------------------------------------------------------------------
+
+
+def _adjust_range(ctx_range: str, prompt_line_count: int) -> str:
+    """Subtract prompt_line_count from the end of a START:END range string.
+    If range has no explicit end (open-ended like "45:" or bare "45"), leave unchanged.
+    """
+    if ":" not in ctx_range:
+        return ctx_range
+    start, _, end = ctx_range.partition(":")
+    if not end:
+        return ctx_range  # "N:" open end
+    try:
+        adjusted = int(end) - prompt_line_count
+        return f"{start}:{adjusted}"
+    except ValueError:
+        return ctx_range
+
+
+def _apply_leading_ws(body: str, response: str) -> str:
+    """Replace leading whitespace of first response line with that of the
+    first non-empty body line. This corrects AI responses that strip or alter
+    indentation on the first output line.
+    """
+    first_body = next((l for l in body.splitlines() if l.strip()), "")
+    leading = first_body[: len(first_body) - len(first_body.lstrip(" \t"))]
+    resp_lines = response.splitlines(keepends=True)
+    if not resp_lines:
+        return response
+    corrected = leading + resp_lines[0].lstrip(" \t")
+    return corrected + "".join(resp_lines[1:])
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +473,110 @@ def cmd_context(cmd: ContextCommand, ctx: PipelineContext):
         )
 
 
+def cmd_extract_prompt_context(cmd: ExtractPromptContextCommand, ctx: PipelineContext):
+    is_stdin = cmd.path in ("-", "stdin")
+
+    # 1. Get raw bytes
+    if is_stdin:
+        raw_str = ctx.consume_stdin()
+        if raw_str is None:
+            info.print("[yellow]No stdin data for extraction.[/yellow]")
+            return
+        raw_bytes = raw_str.encode()
+    else:
+        matches = glob.glob(cmd.path, recursive=True)
+        if not matches:
+            info.print(f"[red]No files matched: {escape(cmd.path)}[/red]")
+            return
+        try:
+            raw_bytes = Path(matches[0]).read_bytes()
+        except OSError as e:
+            info.print(f"[red]Could not read file: {escape(str(e))}[/red]")
+            return
+        raw_str = raw_bytes.decode(errors="replace")
+
+    # 2. Split into prompt lines and body lines
+    marker = ctx.prompt_marker
+    all_lines = raw_str.splitlines(keepends=True)
+
+    prompt_texts: list[str] = []
+    body_lines: list[str] = []
+    for line in all_lines:
+        stripped = line.strip()
+        if stripped.startswith(marker):
+            prompt_texts.append(stripped[len(marker) :].strip())
+        else:
+            body_lines.append(line)
+
+    # 3. No marker found — exact passthrough + add original as context
+    if not prompt_texts:
+        print(raw_str, end="")
+        ctx_file_hint = cmd.ctx_file if is_stdin else (cmd.ctx_file or matches[0])
+        append_user_turn(
+            InteractionMode.CODE,
+            build_user_content(
+                "",
+                [],
+                raw_str,
+                stdin_ctx_file=ctx_file_hint,
+                stdin_ctx_range=cmd.ctx_range,
+            ),
+            ctx.conv_path,
+        )
+        return
+
+    # 4. Marker found — build body string, adjust range, add context, run AI
+    body = "".join(body_lines)
+    prompt_text = "\n".join(prompt_texts)
+    trailing_newline = raw_bytes.endswith(b"\n")
+    prompt_line_count = len(prompt_texts)
+
+    ctx_range = cmd.ctx_range
+    if ctx_range and prompt_line_count:
+        ctx_range = _adjust_range(ctx_range, prompt_line_count)
+
+    ctx_file_hint = cmd.ctx_file if is_stdin else (cmd.ctx_file or matches[0])
+    append_user_turn(
+        InteractionMode.CODE,
+        build_user_content(
+            "",
+            [],
+            body,
+            stdin_ctx_file=ctx_file_hint,
+            stdin_ctx_range=ctx_range,
+        ),
+        ctx.conv_path,
+    )
+
+    # Run AI call
+    try:
+        response_text = run_turn(
+            prompt=prompt_text,
+            context_files=[],
+            stdin_data=None,
+            mode=ctx.mode,
+            mode_suffix=ctx.mode_suffix,
+            api_key=ctx.api_key,
+            model=ctx.model,
+            max_tokens=ctx.max_tokens,
+            sys_prompt=ctx.sys_prompt,
+            conv_path=ctx.conv_path,
+        )
+    except Exception as e:
+        info.print(f"[red]aiv: {escape(str(e))}[/red]")
+        return
+
+    # 5. Apply leading whitespace correction and trailing newline preservation,
+    #    then write directly to stdout buffer to avoid any console reformatting.
+    corrected = _apply_leading_ws(body, response_text)
+    if trailing_newline and not corrected.endswith("\n"):
+        corrected += "\n"
+    elif not trailing_newline and corrected.endswith("\n"):
+        corrected = corrected.rstrip("\n")
+
+    print(corrected, end="")
+
+
 def cmd_prompt(cmd: PromptCommand, ctx: PipelineContext):
     stdin_data = ctx.consume_stdin()
 
@@ -496,6 +638,13 @@ def cmd_set_prompt_suffix(cmd: SetPromptSuffixCommand, ctx: PipelineContext):
         ctx.mode_suffix = "\n\n" + cmd.suffix
     if ctx.interactive:
         info.print(f"[green]Prompt suffix set to: {escape(ctx.mode_suffix)}[/green]")
+
+
+def cmd_set_prompt_marker(cmd: SetPromptMarkerCommand, ctx: PipelineContext):
+    if cmd.marker is not None:
+        ctx.prompt_marker = cmd.marker
+    if ctx.interactive:
+        info.print(f"[green]Prompt marker set to: {escape(ctx.prompt_marker)}[/green]")
 
 
 def cmd_help():
@@ -560,7 +709,7 @@ def parse_command(text: str) -> Command:
         if len(matches) == 1:
             spec = next(iter(matches.values()))
         elif len(matches) > 1:
-            # Ambiguous prefix — list the candidates so the user knows what to  type
+            # Ambiguous prefix — list the candidates so the user knows what to type
             candidates = ", ".join(sorted(matches.keys()))
             info.print(
                 f"[yellow]Ambiguous command: {escape(name)} matches {candidates}[/yellow]"
@@ -647,6 +796,8 @@ def run_command(cmd: Command, ctx: PipelineContext) -> None:
         cmd_working_directory(cmd, ctx)
     elif isinstance(cmd, ContextCommand):
         cmd_context(cmd, ctx)
+    elif isinstance(cmd, ExtractPromptContextCommand):
+        cmd_extract_prompt_context(cmd, ctx)
     elif isinstance(cmd, PromptCommand):
         cmd_prompt(cmd, ctx)
     elif isinstance(cmd, HistoryCommand):
@@ -667,6 +818,8 @@ def run_command(cmd: Command, ctx: PipelineContext) -> None:
         cmd_set_mode(cmd, ctx)
     elif isinstance(cmd, SetPromptSuffixCommand):
         cmd_set_prompt_suffix(cmd, ctx)
+    elif isinstance(cmd, SetPromptMarkerCommand):
+        cmd_set_prompt_marker(cmd, ctx)
     elif isinstance(cmd, HelpCommand):
         cmd_help()
     elif isinstance(cmd, ReplCommand):

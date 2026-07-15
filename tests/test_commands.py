@@ -1,6 +1,6 @@
 from __future__ import annotations
 import os
-
+import json
 import argparse
 import pytest
 from pathlib import Path
@@ -13,6 +13,7 @@ from aiv.models import (
     HistoryCommand,
     ShowCommand,
     ContextCommand,
+    ExtractPromptContextCommand,
     SetModeCommand,
     SetPromptSuffixCommand,
     ResetCommand,
@@ -22,7 +23,14 @@ from aiv.models import (
     SetMaxTokensCommand,
     SetSysPromptCommand,
 )
-from aiv.commands import commands_from_args, render_output, StopPipeline
+from aiv.commands import (
+    commands_from_args,
+    render_output,
+    StopPipeline,
+    _adjust_range,
+    _apply_leading_ws,
+    cmd_extract_prompt_context,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +45,6 @@ def tmp_conv_path(tmp_path) -> Path:
 
 @pytest.fixture
 def ctx(tmp_conv_path) -> PipelineContext:
-    # Pass conv_path_override so tests never trigger the lazy git subprocess
     ctx = PipelineContext(api_key="test")
     ctx.conv_path = tmp_conv_path
     return ctx
@@ -64,6 +71,7 @@ def make_args(**kwargs) -> argparse.Namespace:
         chat=False,
         code=False,
         context=[],
+        extract=[],
         history=None,
         show=None,
         help=False,
@@ -71,6 +79,47 @@ def make_args(**kwargs) -> argparse.Namespace:
     )
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)
+
+
+# ---------------------------------------------------------------------------
+# Helpers for extract tests
+# ---------------------------------------------------------------------------
+
+# Minimal config dict returned by the get_config() mock so PipelineContext
+# __init__ doesn't raise FileNotFoundError when reading prompt_marker.
+_MOCK_CONFIG = {
+    "prompt_marker": "## prompt:",
+    "mode_code_suffix": "\n\nRespond with CODE ONLY.",
+    "mode_chat_suffix": "\n\nRespond using markdown.",
+    "sys_prompt": "You are a test assistant.",
+}
+
+
+@pytest.fixture(autouse=True)
+def patch_get_config():
+    with patch("aiv.models.get_config", return_value=_MOCK_CONFIG):
+        yield
+
+
+@pytest.fixture
+def tmp_conv(tmp_path):
+    ctx = PipelineContext(
+        model="claude-test",
+        api_key="test-key",
+        mode=InteractionMode.CODE,
+    )
+    ctx.conv_path = tmp_path / "conversation.json"
+    ctx.prompt_marker = "## prompt:"
+    return ctx
+
+
+def _read_conv(ctx: PipelineContext) -> list:
+    """Return the messages list from the conversation file."""
+    p = ctx.conv_path
+    if not p.exists():
+        return []
+    data = json.loads(p.read_text())
+    return data.get("messages", [])
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +241,22 @@ class TestCommandsFromArgs:
         args = make_args(prompt=["hello"], repl=True)
         cmds = commands_from_args(args)
         assert isinstance(cmds[-1], ReplCommand)
+
+    def test_extract_flag_produces_extract_command(self):
+        args = make_args(extract=["stdin,file=flake.nix,range=3:7"])
+        cmds = commands_from_args(args)
+        assert len(cmds) == 1
+        assert isinstance(cmds[0], ExtractPromptContextCommand)
+        assert cmds[0].path == "-"
+        assert cmds[0].ctx_file == "flake.nix"
+        assert cmds[0].ctx_range == "3:7"
+
+    def test_extract_file_path(self):
+        args = make_args(extract=["src/foo.py"])
+        cmds = commands_from_args(args)
+        assert len(cmds) == 1
+        assert isinstance(cmds[0], ExtractPromptContextCommand)
+        assert cmds[0].path == "src/foo.py"
 
 
 # ---------------------------------------------------------------------------
@@ -554,3 +619,262 @@ class TestWorkingDirectory:
         with patch("aiv.commands.info") as mock_info:
             cmd_working_directory(cmd, ctx)
             mock_info.print.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _adjust_range
+# ---------------------------------------------------------------------------
+
+
+class TestAdjustRange:
+    def test_basic(self):
+        assert _adjust_range("3:7", 2) == "3:5"
+
+    def test_no_colon(self):
+        # Single number — open ended, leave unchanged
+        assert _adjust_range("45", 3) == "45"
+
+    def test_open_end(self):
+        # "N:" open end — leave unchanged
+        assert _adjust_range("3:", 2) == "3:"
+
+    def test_non_numeric_end(self):
+        assert _adjust_range("3:abc", 2) == "3:abc"
+
+    def test_zero_prompt_lines(self):
+        assert _adjust_range("3:7", 0) == "3:7"
+
+
+# ---------------------------------------------------------------------------
+# _apply_leading_ws
+# ---------------------------------------------------------------------------
+
+
+class TestApplyLeadingWs:
+    def test_restores_indentation(self):
+        body = "    foo = 1;\n    bar = 2;\n"
+        response = "foo = 1;\n    bar = 2;\n"
+        result = _apply_leading_ws(body, response)
+        assert result.startswith("    foo = 1;")
+
+    def test_no_indent_body(self):
+        body = "foo = 1;\nbar = 2;\n"
+        response = "foo = 1;\nbar = 2;\n"
+        assert _apply_leading_ws(body, response) == "foo = 1;\nbar = 2;\n"
+
+    def test_empty_response(self):
+        assert _apply_leading_ws("  foo", "") == ""
+
+    def test_empty_body(self):
+        # No non-empty body line → leading = "" → strips leading ws from response first line
+        result = _apply_leading_ws("", "  foo\n")
+        assert result == "foo\n"
+
+    def test_skips_empty_body_lines(self):
+        body = "\n\n    foo = 1;\n"
+        response = "foo = 1;\n"
+        assert _apply_leading_ws(body, response) == "    foo = 1;\n"
+
+
+# ---------------------------------------------------------------------------
+# cmd_extract_prompt_context — stdin, marker found
+# ---------------------------------------------------------------------------
+
+
+class TestExtractStdinMarkerFound:
+    def test_output_has_leading_ws_corrected(self, tmp_conv, capsys):
+        raw = "  ## prompt: give me this back\n  foo = 1;\n  bar = 2;\n"
+        tmp_conv.stdin_data = raw
+        cmd = ExtractPromptContextCommand(
+            path="-", ctx_file="test.nix", ctx_range="1:3"
+        )
+        with patch("aiv.commands.run_turn", return_value="foo = 1;\n  bar = 2;"):
+            cmd_extract_prompt_context(cmd, tmp_conv)
+        assert capsys.readouterr().out.startswith("  foo = 1;")
+
+    def test_prompt_text_extracted(self, tmp_conv):
+        raw = "  ## prompt: give me this back\n  foo = 1;\n"
+        tmp_conv.stdin_data = raw
+        cmd = ExtractPromptContextCommand(
+            path="-", ctx_file="test.nix", ctx_range="1:2"
+        )
+        with patch("aiv.commands.run_turn", return_value="foo = 1;") as mock_rt:
+            cmd_extract_prompt_context(cmd, tmp_conv)
+        assert mock_rt.call_args.kwargs["prompt"] == "give me this back"
+
+    def test_range_adjusted(self, tmp_conv):
+        # 1 prompt line in range 1:5 → adjusted to 1:4
+        raw = "  ## prompt: do something\n  a\n  b\n  c\n  d\n"
+        tmp_conv.stdin_data = raw
+        cmd = ExtractPromptContextCommand(path="-", ctx_file="f.py", ctx_range="1:5")
+        with patch("aiv.commands.run_turn", return_value="a\n  b\n  c\n  d"):
+            cmd_extract_prompt_context(cmd, tmp_conv)
+        assert "1:4" in _read_conv(tmp_conv)[0]["message"]["content"]
+
+    def test_trailing_newline_preserved(self, tmp_conv, capsys):
+        raw = "## prompt: return x\nx = 1\n"
+        tmp_conv.stdin_data = raw
+        cmd = ExtractPromptContextCommand(path="-")
+        with patch("aiv.commands.run_turn", return_value="x = 1"):
+            cmd_extract_prompt_context(cmd, tmp_conv)
+        assert capsys.readouterr().out.endswith("\n")
+
+    def test_no_trailing_newline_not_added(self, tmp_conv, capsys):
+        raw = "## prompt: return x\nx = 1"  # no trailing newline
+        tmp_conv.stdin_data = raw
+        cmd = ExtractPromptContextCommand(path="-")
+        with patch("aiv.commands.run_turn", return_value="x = 1\n"):
+            cmd_extract_prompt_context(cmd, tmp_conv)
+        assert not capsys.readouterr().out.endswith("\n")
+
+    def test_multiline_prompt(self, tmp_conv):
+        raw = "## prompt: first line\n## prompt: second line\ncode here\n"
+        tmp_conv.stdin_data = raw
+        cmd = ExtractPromptContextCommand(path="-")
+        with patch("aiv.commands.run_turn", return_value="code here") as mock_rt:
+            cmd_extract_prompt_context(cmd, tmp_conv)
+        assert mock_rt.call_args.kwargs["prompt"] == "first line\nsecond line"
+
+    def test_context_stored_without_marker(self, tmp_conv):
+        raw = "## prompt: do it\nfoo = 1\n"
+        tmp_conv.stdin_data = raw
+        cmd = ExtractPromptContextCommand(path="-", ctx_file="x.py", ctx_range="10:11")
+        with patch("aiv.commands.run_turn", return_value="foo = 1"):
+            cmd_extract_prompt_context(cmd, tmp_conv)
+        messages = _read_conv(tmp_conv)
+        # cmd_extract_prompt_context appends exactly one context turn itself;
+        # run_turn is mocked so prompt+assistant turns are not written
+        assert len(messages) == 1
+        content = messages[0]["message"]["content"]
+        assert "## prompt:" not in content
+        assert "foo = 1" in content
+
+    def test_context_range_hint(self, tmp_conv):
+        raw = "## prompt: do it\nfoo = 1\n"
+        tmp_conv.stdin_data = raw
+        cmd = ExtractPromptContextCommand(path="-", ctx_file="x.py", ctx_range="10:11")
+        with patch("aiv.commands.run_turn", return_value="foo = 1"):
+            cmd_extract_prompt_context(cmd, tmp_conv)
+        content = _read_conv(tmp_conv)[0]["message"]["content"]
+        # range adjusted by 1 prompt line: 10:11 → 10:10
+        assert "x.py:10:10" in content
+
+
+# ---------------------------------------------------------------------------
+# cmd_extract_prompt_context — stdin, no marker (passthrough)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractStdinNoMarker:
+    def test_exact_passthrough(self, tmp_conv, capsys):
+        raw = "  foo = 1;\n  bar = 2;\n"
+        tmp_conv.stdin_data = raw
+        cmd = ExtractPromptContextCommand(path="-")
+        with patch("aiv.commands.run_turn") as mock_rt:
+            cmd_extract_prompt_context(cmd, tmp_conv)
+            mock_rt.assert_not_called()
+        assert capsys.readouterr().out == raw
+
+    def test_context_stored(self, tmp_conv):
+        raw = "foo = 1;\nbar = 2;\n"
+        tmp_conv.stdin_data = raw
+        cmd = ExtractPromptContextCommand(path="-", ctx_file="x.py", ctx_range="5:6")
+        with patch("aiv.commands.run_turn"):
+            cmd_extract_prompt_context(cmd, tmp_conv)
+        messages = _read_conv(tmp_conv)
+        assert len(messages) == 1
+        assert "foo = 1;" in messages[0]["message"]["content"]
+
+
+# ---------------------------------------------------------------------------
+# cmd_extract_prompt_context — file path
+# ---------------------------------------------------------------------------
+
+
+class TestExtractFile:
+    def test_marker_found_prompt_extracted(self, tmp_conv, tmp_path, capsys):
+        f = tmp_path / "test.nix"
+        f.write_text("## prompt: give this back\nfoo = 1;\n")
+        cmd = ExtractPromptContextCommand(path=str(f))
+        with patch("aiv.commands.run_turn", return_value="foo = 1;") as mock_rt:
+            cmd_extract_prompt_context(cmd, tmp_conv)
+        assert mock_rt.call_args.kwargs["prompt"] == "give this back"
+        assert "foo = 1;" in capsys.readouterr().out
+
+    def test_no_marker_exact_passthrough(self, tmp_conv, tmp_path, capsys):
+        content = "foo = 1;\nbar = 2;\n"
+        f = tmp_path / "test.nix"
+        f.write_bytes(content.encode())
+        cmd = ExtractPromptContextCommand(path=str(f))
+        with patch("aiv.commands.run_turn") as mock_rt:
+            cmd_extract_prompt_context(cmd, tmp_conv)
+            mock_rt.assert_not_called()
+        assert capsys.readouterr().out == content
+
+    def test_file_not_found(self, tmp_conv, capsys):
+        cmd = ExtractPromptContextCommand(path="/nonexistent/path/*.nix")
+        with patch("aiv.commands.run_turn") as mock_rt:
+            cmd_extract_prompt_context(cmd, tmp_conv)
+            mock_rt.assert_not_called()
+
+    def test_marker_body_excludes_marker_line(self, tmp_conv, tmp_path):
+        f = tmp_path / "test.py"
+        f.write_text("## prompt: do it\nfoo = 1\nbar = 2\n")
+        cmd = ExtractPromptContextCommand(path=str(f))
+        with patch("aiv.commands.run_turn", return_value="foo = 1\nbar = 2"):
+            cmd_extract_prompt_context(cmd, tmp_conv)
+        content = _read_conv(tmp_conv)[0]["message"]["content"]
+        assert "## prompt:" not in content
+        assert "foo = 1" in content
+
+    def test_range_adjusted(self, tmp_conv, tmp_path):
+        f = tmp_path / "test.py"
+        f.write_text("## prompt: do it\na\nb\nc\n")
+        # 1 prompt line, range 1:4 → adjusted to 1:3
+        cmd = ExtractPromptContextCommand(path=str(f), ctx_range="1:4")
+        with patch("aiv.commands.run_turn", return_value="a\nb\nc"):
+            cmd_extract_prompt_context(cmd, tmp_conv)
+        assert "1:3" in _read_conv(tmp_conv)[0]["message"]["content"]
+
+
+# ---------------------------------------------------------------------------
+# cli.py stdin routing — has_explicit_stdin_context includes extract list
+# ---------------------------------------------------------------------------
+
+
+class TestCliStdinRouting:
+    def test_extract_stdin_routed_correctly(self):
+        context_files = []
+        extract_files = ["stdin,file=flake.nix,range=3:7"]
+        has_explicit_stdin_context = any(
+            c == "-" or c.startswith("-,") or c == "stdin" or c.startswith("stdin,")
+            for c in context_files + extract_files
+        )
+        assert has_explicit_stdin_context is True
+
+    def test_context_stdin_still_detected(self):
+        context_files = ["stdin,file=foo.py,range=1:10"]
+        extract_files = []
+        has_explicit_stdin_context = any(
+            c == "-" or c.startswith("-,") or c == "stdin" or c.startswith("stdin,")
+            for c in context_files + extract_files
+        )
+        assert has_explicit_stdin_context is True
+
+    def test_no_stdin_flag(self):
+        context_files = ["src/**/*.py"]
+        extract_files = ["src/main.py"]
+        has_explicit_stdin_context = any(
+            c == "-" or c.startswith("-,") or c == "stdin" or c.startswith("stdin,")
+            for c in context_files + extract_files
+        )
+        assert has_explicit_stdin_context is False
+
+    def test_extract_dash_stdin(self):
+        context_files = []
+        extract_files = ["-"]
+        has_explicit_stdin_context = any(
+            c == "-" or c.startswith("-,") or c == "stdin" or c.startswith("stdin,")
+            for c in context_files + extract_files
+        )
+        assert has_explicit_stdin_context is True

@@ -18,11 +18,10 @@ let
     sys_prompt = cfg.systemPrompt;
     mode_code_suffix = cfg.codePromptSuffix;
     mode_chat_suffix = cfg.chatPromptSuffix;
+    prompt_marker = cfg.promptMarker;
   };
 
   aivConfigFile = (pkgs.formats.toml { }).generate "aiv-config.toml" aivConfigAttrs;
-
-  aivExtractPrompt = lib.getExe' cfg.package "aiv-extract-prompt";
 in
 {
   options.programs.aiv = {
@@ -94,6 +93,15 @@ in
         If null, the tool's built-in default is used.
       '';
     };
+
+    promptMarker = lib.mkOption {
+      type = lib.types.str;
+      default = "## prompt:";
+      description = ''
+        Marker text for the prompt to be extracted from input provided
+        to "aiv --extract".
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -118,7 +126,7 @@ in
       let
         aiv = lib.getExe cfg.package;
         keys.space.v = {
-          r = ":pipe ${aivExtractPrompt} '%{buffer_name}' '%{selection_line_start}' '%{selection_line_end}'"; # replace selection
+          r = ":pipe ${aiv} -X -e 'stdin,file=%{buffer_name},range='%{selection_line_start}:%{selection_line_end}'"; # replace selection
           c = ":pipe-to ${aiv} -X -c 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"; # load selection as context, no output
           C = ":pipe-to ${aiv} -X -R -c 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"; # load selection as context, resetting conversation, no output
           R = ":run-shell-command echo '' | ${aiv} -X -R"; # reset conversation
@@ -129,7 +137,7 @@ in
         select = keys;
         normal = keys;
         insert."A-p" = [
-          ":insert-output printf '## prompt: '"
+          ":insert-output printf '%s' '${cfg.promptMarker} '"
           "move_char_right"
         ];
       }
@@ -137,7 +145,7 @@ in
 
     programs.vim.extraConfig = ''
       " ai-prompt-rewrite: pipe selection through aiv-extract-prompt
-      xnoremap <leader>vr :!${aivExtractPrompt} '%' line("'<") line("'>")<CR>
+      xnoremap <leader>vr :!aiv -X -e stdin,file='%',range=line("'<"):line("'>")<CR>
       " ai-context: pipe selection to aiv (no output)
       xnoremap <leader>vc :w !aiv -X -c stdin,file=%,range=\%('<):\%('>) <CR>
       " ai-context-reset: pipe selection to aiv (reset conversation, no output)
@@ -147,7 +155,7 @@ in
       " ai-context-file: load current buffer from its file
       nnoremap <leader>vf :execute '!aiv -X -c ' .. shellescape(expand('%:p'))<CR>
       " insert ## prompt: prefix
-      inoremap <M-p> ## prompt: 
+      inoremap <M-p> ${cfg.promptMarker} 
     '';
 
     programs.neovim.initLua = ''
@@ -156,7 +164,7 @@ in
         local file = vim.fn.expand('%:p')
         local firstline = vim.fn.line("'<")
         local lastline = vim.fn.line("'>")
-        vim.cmd(firstline .. ',' .. lastline .. '!' .. '${aivExtractPrompt} ' .. vim.fn.shellescape(file) .. ' ' .. firstline .. ' ' .. lastline)
+        vim.cmd(firstline .. ',' .. lastline .. '!' .. 'aiv -X -e stdin,file=' .. vim.fn.shellescape(file) .. ',range=' .. firstline .. ':' .. lastline)
       end, { desc = 'ai: rewrite selection' })
       -- ai-context: pipe selection to aiv (no output)
       vim.keymap.set('x', '<leader>vc', function()
@@ -177,7 +185,7 @@ in
       -- ai-context-file: load current buffer from its file
       vim.keymap.set('n', '<leader>vf', function() vim.cmd('!aiv -X -c ' .. vim.fn.shellescape(vim.fn.expand('%:p'))) end, { desc = 'ai: load current buffer from its file' })
       -- insert ## prompt: prefix
-      vim.keymap.set('i', '<M-p>', '## prompt: ', { desc = 'ai: insert prompt prefix' })
+      vim.keymap.set('i', '<M-p>', '${cfg.promptMarker} ', { desc = 'ai: insert prompt prefix' })
     '';
   };
 }

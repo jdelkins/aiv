@@ -2,9 +2,6 @@
   lib,
   python3Packages,
   git,
-  bash,
-  gnused,
-  makeWrapper,
 }:
 
 let
@@ -37,7 +34,6 @@ python3Packages.buildPythonApplication {
 
   nativeBuildInputs = [
     git
-    makeWrapper
   ];
 
   nativeCheckInputs = with python3Packages; [ pytest ];
@@ -48,18 +44,6 @@ python3Packages.buildPythonApplication {
     runHook preCheck
     pytest tests/
     runHook postCheck
-  '';
-
-  postInstall = ''
-    install -Dm755 scripts/aiv-extract-prompt $out/bin/aiv-extract-prompt
-    wrapProgram $out/bin/aiv-extract-prompt \
-      --prefix PATH : ${
-        lib.makeBinPath [
-          bash
-          gnused
-          git
-        ]
-      }:$out/bin
   '';
 
   meta = {

@@ -8,6 +8,7 @@ from aiv.models import (
     InteractionMode,
     Command,
     ContextCommand,
+    ExtractPromptContextCommand,
     PromptCommand,
     HistoryCommand,
     ShowCommand,
@@ -24,6 +25,7 @@ from aiv.models import (
     ShowVersionCommand,
     ShowPipelineContextCommand,
     SetPromptSuffixCommand,
+    SetPromptMarkerCommand,
     WorkingDirectoryCommand,
 )
 
@@ -50,11 +52,10 @@ def _parse_context_arg(args: str) -> ContextCommand:
     if not is_stdin:
         return ContextCommand(path=args)
 
-    # Normalise to a remainder of ",key=val,..." or ""
     if args.startswith("stdin"):
-        remainder = args[len("stdin") :]
+        remainder = args[len("stdin"):]
     elif args.startswith("-,"):
-        remainder = args[1:]  # strip "-", keep ",key=val,..."
+        remainder = args[1:]
     else:
         remainder = ""
 
@@ -68,6 +69,40 @@ def _parse_context_arg(args: str) -> ContextCommand:
     ctx_range = meta.get("range") or None
 
     return ContextCommand(path="-", ctx_file=ctx_file, ctx_range=ctx_range)
+
+
+def _parse_extract_arg(args: str) -> ExtractPromptContextCommand:
+    """
+    Same parsing logic as _parse_context_arg but produces an
+    ExtractPromptContextCommand.
+    """
+    args = args.strip()
+    is_stdin = (
+        args == "-"
+        or args == "stdin"
+        or args.startswith("stdin,")
+        or args.startswith("-,")
+    )
+    if not is_stdin:
+        return ExtractPromptContextCommand(path=args)
+
+    if args.startswith("stdin"):
+        remainder = args[len("stdin"):]
+    elif args.startswith("-,"):
+        remainder = args[1:]
+    else:
+        remainder = ""
+
+    meta: dict[str, str] = {}
+    for part in remainder.split(","):
+        if "=" in part:
+            k, _, v = part.partition("=")
+            meta[k.strip().lower()] = v.strip()
+
+    ctx_file = meta.get("file") or None
+    ctx_range = meta.get("range") or None
+
+    return ExtractPromptContextCommand(path="-", ctx_file=ctx_file, ctx_range=ctx_range)
 
 
 @dataclass(frozen=True)
@@ -207,6 +242,16 @@ COMMAND_SPECS: list[CommandSpec] = [
         precedence=25,
     ),
     CommandSpec(
+        names=("!prompt-marker",),
+        long_option="--prompt-marker",
+        short_option=None,
+        usage="<marker>",
+        help="Set the prompt extraction marker string (default: '## prompt:')",
+        parse=lambda args: SetPromptMarkerCommand(marker=args.strip() or None),
+        argparse_kwargs=dict(default=None, metavar="MARKER"),
+        precedence=20,
+    ),
+    CommandSpec(
         names=("!context",),
         long_option="--context",
         short_option="-c",
@@ -214,6 +259,18 @@ COMMAND_SPECS: list[CommandSpec] = [
         repl_usage="<file_pattern>",
         help="Add context from files (glob pattern) or stdin; use 'stdin,file=PATH,range=L:L' for metadata",
         parse=_parse_context_arg,
+        argparse_kwargs=dict(action="append", default=[], metavar="file_pattern"),
+        takes_path=True,
+        precedence=30,
+    ),
+    CommandSpec(
+        names=("!extract",),
+        long_option="--extract",
+        short_option="-e",
+        usage="<file_pattern|stdin[,file=PATH][,range=L:L]>",
+        repl_usage="<file_pattern>",
+        help="Extract prompt marker lines as prompt, add rest as context, output AI response (or passthrough if no marker)",
+        parse=_parse_extract_arg,
         argparse_kwargs=dict(action="append", default=[], metavar="file_pattern"),
         takes_path=True,
         precedence=30,

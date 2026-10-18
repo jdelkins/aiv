@@ -8,9 +8,84 @@
 let
   cfg = config.programs.aiv;
 
-  # Build the TOML attribute set; omit optional keys when null so the tool's
-  # own defaults apply. Exactly one of api_key or api_key_file will be set.
-  aivConfigAttrs = lib.filterAttrs (_k: v: v != null) {
+  # Mirrors aiv.config.VALID_PROVIDERS (aiv/config.py)
+  validProviders = [
+    "anthropic"
+    "openai"
+    "openai-reasoning"
+  ];
+
+  # Per-provider submodule: mirrors a single [providers.<name>] table in
+  # config.toml. All fields are optional — a provider with no entry (or with
+  # some fields unset) falls back to the flat top-level apiKey/apiKeyFile/
+  # model/maxTokens options, exactly as aiv.config.get_provider_settings()
+  # does at runtime.
+  providerOpts =
+    { name, ... }:
+    {
+      options = {
+        apiKey = lib.mkOption {
+          type = with lib.types; nullOr str;
+          default = null;
+          description = ''
+            API key for the "${name}" provider, written directly into the aiv
+            config file. Mutually exclusive with apiKeyFile.
+            Warning: this value will be written to the Nix store. Prefer
+            apiKeyFile with a secrets manager such as sops-nix or agenix.
+          '';
+        };
+
+        apiKeyFile = lib.mkOption {
+          type = with lib.types; nullOr path;
+          default = null;
+          description = ''
+            Path to a file containing the API key for the "${name}" provider.
+            aiv reads and strips the file contents at runtime.
+            Mutually exclusive with apiKey.
+          '';
+        };
+
+        model = lib.mkOption {
+          type = with lib.types; nullOr str;
+          default = null;
+          description = ''
+            Default model for the "${name}" provider. If null, falls back to
+            the top-level programs.aiv.model option.
+          '';
+        };
+
+        maxTokens = lib.mkOption {
+          type = with lib.types; nullOr ints.positive;
+          default = null;
+          description = ''
+            Maximum response tokens for the "${name}" provider. If null,
+            falls back to the top-level programs.aiv.maxTokens option.
+          '';
+        };
+      };
+    };
+
+  # Build a single provider's TOML attrs, omitting unset keys so the tool's
+  # own fallback-to-top-level-config logic applies.
+  providerToAttrs =
+    p:
+    lib.filterAttrs (_k: v: v != null) {
+      api_key = p.apiKey;
+      api_key_file = p.apiKeyFile;
+      model = p.model;
+      max_tokens = p.maxTokens;
+    };
+
+  providersAttrs = lib.mapAttrs (_name: providerToAttrs) cfg.providers;
+
+  # Top-level (legacy/fallback) attribute set; omit optional keys when null so
+  # the tool's own defaults (or a matching [providers.<name>] entry) apply.
+  # apiKey/apiKeyFile here are now optional — they only need to be set if you
+  # want a fallback for providers with no dedicated entry in `providers`, or
+  # if you're using aiv with a single provider and never touch `providers` at
+  # all (the pre-multi-provider configuration shape).
+  topLevelAttrs = lib.filterAttrs (_k: v: v != null) {
+    provider = cfg.provider;
     api_key = cfg.apiKey;
     api_key_file = cfg.apiKeyFile;
     model = cfg.model;
@@ -20,6 +95,9 @@ let
     mode_chat_suffix = cfg.chatPromptSuffix;
     prompt_marker = cfg.promptMarker;
   };
+
+  aivConfigAttrs =
+    topLevelAttrs // (lib.optionalAttrs (cfg.providers != { }) { providers = providersAttrs; });
 
   aivConfigFile = (pkgs.formats.toml { }).generate "aiv-config.toml" aivConfigAttrs;
 in
@@ -33,12 +111,44 @@ in
       description = "The aiv package to install.";
     };
 
+    provider = lib.mkOption {
+      type = with lib.types; nullOr (enum validProviders);
+      default = null;
+      description = ''
+        The default active provider used when no session_state override is
+        present. If null, the tool's own built-in default (anthropic) applies.
+        Must be one of: ${lib.concatStringsSep ", " validProviders}.
+      '';
+    };
+
+    providers = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.submodule providerOpts);
+      default = { };
+      description = ''
+        Per-provider configuration, written as [providers.<name>] tables in
+        the aiv config file. Each attribute name must be a valid provider
+        (see the assertion below); a provider with no entry here falls back
+        to the top-level apiKey/apiKeyFile/model/maxTokens options.
+      '';
+      example = lib.literalExpression ''
+        {
+          anthropic.apiKeyFile = config.sops.secrets.anthropic-api-key.path;
+          openai.apiKeyFile = config.sops.secrets.openai-api-key.path;
+          openai.model = "gpt-4o-mini";
+          openai-reasoning.apiKeyFile = config.sops.secrets.openai-api-key.path;
+          openai-reasoning.model = "o3-mini";
+        }
+      '';
+    };
+
     apiKey = lib.mkOption {
       type = with lib.types; nullOr str;
       default = null;
       description = ''
-        Anthropic API key written directly into the aiv config file.
-        Mutually exclusive with apiKeyFile.
+        API key written directly into the top level of the aiv config file.
+        Acts as the fallback for any provider in `providers` without its own
+        apiKey/apiKeyFile set, or as the sole provider's key if `providers` is
+        left empty entirely. Mutually exclusive with apiKeyFile.
         Warning: this value will be written to the Nix store. Prefer apiKeyFile
         with a secrets manager such as sops-nix or agenix.
       '';
@@ -48,9 +158,9 @@ in
       type = with lib.types; nullOr path;
       default = null;
       description = ''
-        Path to a file containing the Anthropic API key. aiv reads and strips
-        the file contents at runtime. Use this with sops-nix, agenix, or any
-        other secrets manager that delivers secrets as files.
+        Path to a file containing the top-level fallback API key. aiv reads
+        and strips the file contents at runtime. Use this with sops-nix,
+        agenix, or any other secrets manager that delivers secrets as files.
         Mutually exclusive with apiKey.
       '';
     };
@@ -58,13 +168,13 @@ in
     model = lib.mkOption {
       type = lib.types.str;
       default = "claude-sonnet-4-6";
-      description = "Default Anthropic model used by aiv.";
+      description = "Top-level fallback default model used by aiv.";
     };
 
     maxTokens = lib.mkOption {
       type = lib.types.ints.positive;
       default = 4096;
-      description = "Maximum response tokens.";
+      description = "Top-level fallback maximum response tokens.";
     };
 
     systemPrompt = lib.mkOption {
@@ -107,17 +217,28 @@ in
   config = lib.mkIf cfg.enable {
     assertions = [
       {
-        assertion = (cfg.apiKey != null) != (cfg.apiKeyFile != null);
-        message = "programs.aiv: exactly one of apiKey or apiKeyFile must be set.";
+        assertion = !(cfg.apiKey != null && cfg.apiKeyFile != null);
+        message = "programs.aiv: apiKey and apiKeyFile are mutually exclusive.";
       }
-    ];
+      {
+        assertion = lib.all (name: lib.elem name validProviders) (lib.attrNames cfg.providers);
+        message = ''
+          programs.aiv: providers.<name> keys must be one of: ${lib.concatStringsSep ", " validProviders}.
+          Got: ${lib.concatStringsSep ", " (lib.attrNames cfg.providers)}
+        '';
+      }
+    ]
+    ++ (lib.mapAttrsToList (name: p: {
+      assertion = !(p.apiKey != null && p.apiKeyFile != null);
+      message = "programs.aiv.providers.${name}: apiKey and apiKeyFile are mutually exclusive.";
+    }) cfg.providers);
 
     home.packages = [ cfg.package ];
 
     xdg.configFile."aiv/config.toml".source = aivConfigFile;
 
     programs.git.ignores = [
-      ".aiv-conversation.json" # conversation state
+      ".aiv-conversation.json" # conversation state + session_state
       ".aiv-conversation.lock" # conversation lock file
       ".aiv-history" # repl history file
     ];

@@ -3,10 +3,10 @@
 import sys
 import argparse
 
-from aiv.config import get_config
+from aiv.config import get_config, get_provider_settings, DEFAULT_PROVIDER
 from aiv.models import PipelineContext, InteractionMode
 from aiv.specs import COMMAND_SPECS
-from aiv.commands import commands_from_args, run_pipeline
+from aiv.commands import commands_from_args, run_pipeline, apply_session_state
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -65,13 +65,6 @@ def main():
         print(e, file=sys.stderr)
         sys.exit(1)
 
-    api_key = config.get("api_key", "")
-    if not api_key:
-        print("aiv: api_key not set", file=sys.stderr)
-        sys.exit(1)
-
-    max_tokens = config.get("max_tokens", 4096)
-
     # ---------------------------------------------------------------------------
     # Stdin handling — must be done before building PipelineContext so that
     # ctx.stdin_data is set correctly before commands_from_args runs.
@@ -110,20 +103,71 @@ def main():
     elif getattr(args, "code", False):
         initial_mode = InteractionMode.CODE
 
+    # Resolution order, per design discussion:
+    #   1. config.toml defaults — provider-scoped (provider, model, max_tokens,
+    #      api_key/api_key_file via get_provider_settings) and global
+    #      (sys_prompt, mode_chat_suffix, mode_code_suffix)
+    #   2. session_state from the conversation file, if present
+    #   3. explicit CLI flags (-P/-m/--api-key-file/--max-tokens/-s/
+    #      --prompt-suffix), applied afterward via the normal command pipeline —
+    #      each of which re-derives and persists session_state itself (see
+    #      cmd_set_provider/cmd_set_model/cmd_set_api_key_file/
+    #      cmd_set_max_tokens/cmd_set_sys_prompt/cmd_set_prompt_suffix in
+    #      commands.py), so no special-casing is needed here beyond
+    #      constructing ctx with the pre-CLI-flag baseline.
+    #
+    # ctx.conv_path must be forced to resolve now (rather than lazily) since
+    # apply_session_state() needs it immediately, before any pipeline command
+    # has run. This does mean --version/--help/--repl-with-nothing-else now pay
+    # the conv_path resolution cost unconditionally; see caveat at bottom.
+    default_provider = config.get("provider", DEFAULT_PROVIDER)
+    default_settings = get_provider_settings(default_provider)
+
     ctx = PipelineContext(
-        model=config.get("model", "claude-sonnet-4-6"),
+        model=default_settings.get("model") or "claude-sonnet-4-6",
+        provider=default_provider,
         sys_prompt=config.get("sys_prompt", ""),
+        mode_chat_suffix=config.get("mode_chat_suffix", ""),
+        mode_code_suffix=config.get("mode_code_suffix", ""),
         mode=initial_mode,
-        api_key=api_key,
-        max_tokens=int(max_tokens),
+        api_key=default_settings.get("api_key") or "",
+        max_tokens=int(default_settings.get("max_tokens") or 4096),
         stdin_data=stdin_data,
         piped_stdin=not stdin_is_tty,
-        # conv_path resolved lazily on first access — commands that don't need
-        # the conversation file (--version, --help, --repl) pay no I/O cost.
     )
+
+    try:
+        apply_session_state(ctx)  # layers session_state over the config defaults above
+    except FileNotFoundError as e:
+        print(e, file=sys.stderr)
+        sys.exit(1)
+
+    if not ctx.api_key:
+        print("aiv: api_key not set", file=sys.stderr)
+        sys.exit(1)
 
     run_pipeline(commands_from_args(args), ctx)
 
 
 if __name__ == "__main__":
     main()
+
+# Caveat: ctx.conv_path is resolved eagerly (apply_session_state reads it
+# immediately after construction) rather than lazily on first pipeline command,
+# unchanged from the prior pass — a bare `aiv --version` or `aiv -i` with no
+# other flags will always do a git-root lookup + read the conversation file up
+# front. Flagged previously; still true, not addressed here.
+#
+# Caveat: mode_chat_suffix/mode_code_suffix are now passed explicitly into
+# PipelineContext from config.get(...) rather than being read lazily inside the
+# mode_suffix property (that property no longer calls get_config() at all, per
+# the models.py pass). The "" fallback here is intentionally unreachable in
+# practice — get_config() always sets both keys via _normalise_suffix()/
+# setdefault() before returning, so config.get(..., "") only matters if
+# get_config() itself is somehow bypassed or mocked without those keys, which
+# existing tests should be checked against (patch_get_config's _MOCK_CONFIG in
+# test_commands.py already includes both keys, so should be unaffected).
+#
+# Caveat: api_key emptiness check remains positioned AFTER apply_session_state,
+# unchanged from before — a session_state api_key_file override can supply the
+# key even when config has none configured at all for the default provider.

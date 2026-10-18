@@ -4,6 +4,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Callable
 
+from aiv.config import VALID_PROVIDERS
 from aiv.models import (
     InteractionMode,
     Command,
@@ -19,6 +20,8 @@ from aiv.models import (
     ExitCommand,
     NoOpCommand,
     SetModelCommand,
+    SetProviderCommand,
+    SetApiKeyFileCommand,
     SetMaxTokensCommand,
     SetSysPromptCommand,
     SetModeCommand,
@@ -127,8 +130,16 @@ class CommandSpec:
 # Registry
 # ---------------------------------------------------------------------------
 # Precedence bands:
+#   5   — working directory change (must run before conv_path is resolved)
 #   10  — destructive session reset (must run before anything reads state)
-#   20  — session configuration (model, tokens, mode, sys-prompt)
+#   19  — provider switch (must run before model/max_tokens/api-key-file, since
+#         cmd_set_provider pulls that provider's configured defaults for all
+#         three as a side effect of switching)
+#   20  — session configuration (model, max_tokens, api-key-file, mode,
+#         sys-prompt, prompt-marker) — all depend on provider already being
+#         resolved, hence running strictly after band 19
+#   25  — prompt suffix override (after mode, since !suffix's CHAT/CODE-in-place
+#         behavior depends on ctx.mode already reflecting the current mode)
 #   30  — context loading
 #   40  — prompt / main action
 #   50  — read-only display commands (history, show)
@@ -159,13 +170,41 @@ COMMAND_SPECS: list[CommandSpec] = [
         precedence=10,
     ),
     CommandSpec(
+        names=("!provider",),
+        long_option="--provider",
+        short_option="-P",
+        usage=f"<{'|'.join(VALID_PROVIDERS)}>",
+        help="Set the API provider",
+        parse=lambda args: SetProviderCommand(
+            provider=args.strip() if args != "" else None
+        ),
+        argparse_kwargs=dict(default=None, metavar="PROVIDER"),
+        precedence=19,  # must resolve before !model/!api-key-file/!max-tokens (all
+                         # 20), since cmd_set_provider pulls that provider's
+                         # configured defaults for all three as a side effect
+    ),
+    CommandSpec(
         names=("!model",),
         long_option="--model",
         short_option="-m",
         usage="<model>",
-        help="Set the Anthropic model",
+        help="Set the model",
         parse=lambda args: SetModelCommand(model=args.strip() if args != "" else None),
         argparse_kwargs=dict(default=None, metavar="MODEL"),
+        precedence=20,
+    ),
+    CommandSpec(
+        # Required argument: the path itself is not retained anywhere queryable,
+        # only its effect (api_key). No bare "show current value" form, unlike
+        # most other Set* specs, so argparse_kwargs omits nargs="?"/const=True.
+        names=("!api-key-file",),
+        long_option="--api-key-file",
+        short_option=None,
+        usage="<file>",
+        help="Read API key from file and set it for the session",
+        takes_path=True,
+        parse=lambda args: SetApiKeyFileCommand(path=Path(args.strip()).expanduser()),
+        argparse_kwargs=dict(default=None, metavar="FILE"),
         precedence=20,
     ),
     CommandSpec(
@@ -232,11 +271,18 @@ COMMAND_SPECS: list[CommandSpec] = [
         precedence=20,
     ),
     CommandSpec(
+        # Behavior depends on ctx.mode at the time it's invoked: in CHAT/CODE
+        # mode it edits that mode's persistent suffix in place (session-state
+        # eligible); otherwise it sets an ephemeral CUSTOM-mode override that
+        # is never persisted. See cmd_set_prompt_suffix in commands.py.
+        # precedence=25 (after mode-setting commands at 20) so that e.g.
+        # `aiv -X --prompt-suffix "..."` edits CODE's suffix, not DEFAULT's,
+        # regardless of flag order on the command line.
         names=("!suffix",),
         long_option="--prompt-suffix",
         short_option=None,
         usage="<suffix>",
-        help="Set a custom prompt suffix",
+        help="Set a custom prompt suffix (edits current CHAT/CODE suffix in place, or sets an ephemeral override otherwise)",
         parse=lambda args: SetPromptSuffixCommand(args.strip() if args != "" else None),
         argparse_kwargs=dict(default=None, metavar="SUFFIX"),
         precedence=25,
@@ -386,3 +432,17 @@ PROMPT_SPEC: CommandSpec = next(
     for s in COMMAND_SPECS
     if s.long_option is None and not s.names and not s.argparse_kwargs
 )
+
+# Caveat: no new CommandSpec entries were added for mode_chat_suffix/
+# mode_code_suffix per the decision to reuse the single !suffix/--prompt-suffix
+# spec for both — the branching on ctx.mode happens entirely inside
+# cmd_set_prompt_suffix (commands.py), not at the spec/parsing layer. The only
+# change to the !suffix spec itself is precedence 20->25 and an updated help
+# string reflecting its new mode-dependent behavior.
+#
+# Caveat: !suffix's precedence=25 placement (after !mode/!chat/!code at 20, but
+# before !context at 30) matters for a one-shot invocation like
+# `aiv -X --prompt-suffix "be extra terse"` — -X (SetModeCommand->CODE) must
+# resolve before --prompt-suffix so ctx.mode is already CODE when
+# cmd_set_prompt_suffix runs, otherwise it would take the DEFAULT/CUSTOM branch
+# instead of editing mode_code_suffix in place.

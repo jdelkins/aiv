@@ -16,6 +16,7 @@ from aiv.commands import (
     run_command,
     cmd_intro,
     cmd_set_mode,
+    apply_session_state,
     QuitPipeline,
     StopPipeline,
     HistoryCommand,
@@ -207,24 +208,41 @@ def run_repl_loop(ctx: PipelineContext) -> None:
                         print_info(
                             "[red]Conversation file is unreadable or malformed.[/red]"
                         )
-                    elif new_count == 0 and last_seen_count > 0:
-                        print_info(
-                            "[yellow]Conversation was cleared externally.[/yellow]"
-                        )
-                    elif new_count < last_seen_count:
-                        print_info(
-                            f"[yellow]Conversation was modified externally ({last_seen_count} → {new_count} interactions).[/yellow]"
-                        )
-                    elif new_count >= last_seen_count:
+                    else:
+                        # Re-derive ctx.provider/model/api_key_file/api_key from
+                        # whatever session_state is now on disk, in case the
+                        # external change was a provider/model switch made by
+                        # another aiv invocation. Deliberately NOT caught here:
+                        # a FileNotFoundError means an api_key_file referenced by
+                        # session_state has been removed out from under a live
+                        # session — a genuine external race with no safe
+                        # fallback, so the REPL is allowed to crash rather than
+                        # silently continue on a key that may no longer be valid
+                        # (per design discussion).
                         try:
-                            run_command(
-                                ShowCommand(
-                                    args=f"{min(new_count, last_seen_count + 1)}-"
-                                ),
-                                ctx,
+                            apply_session_state(ctx)
+                        except FileNotFoundError as e:
+                            print_info(f"[red]{e}[/red]")
+                            return
+
+                        if new_count == 0 and last_seen_count > 0:
+                            print_info(
+                                "[yellow]Conversation was cleared externally.[/yellow]"
                             )
-                        except (StopPipeline, QuitPipeline):
-                            pass
+                        elif new_count < last_seen_count:
+                            print_info(
+                                f"[yellow]Conversation was modified externally ({last_seen_count} → {new_count} interactions).[/yellow]"
+                            )
+                        elif new_count >= last_seen_count:
+                            try:
+                                run_command(
+                                    ShowCommand(
+                                        args=f"{min(new_count, last_seen_count + 1)}-"
+                                    ),
+                                    ctx,
+                                )
+                            except (StopPipeline, QuitPipeline):
+                                pass
                     if new_count is not None:
                         last_seen_count = new_count
                     continue

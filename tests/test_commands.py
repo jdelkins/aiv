@@ -20,6 +20,8 @@ from aiv.models import (
     ReplCommand,
     ShowVersionCommand,
     SetModelCommand,
+    SetProviderCommand,
+    SetApiKeyFileCommand,
     SetMaxTokensCommand,
     SetSysPromptCommand,
 )
@@ -66,8 +68,11 @@ def make_args(**kwargs) -> argparse.Namespace:
         prompt=[],
         reset=False,
         model=None,
+        provider=None,
+        api_key_file=None,
         max_tokens=None,
         sys_prompt=None,
+        prompt_suffix=None,
         chat=False,
         code=False,
         context=[],
@@ -120,6 +125,80 @@ def _read_conv(ctx: PipelineContext) -> list:
         return []
     data = json.loads(p.read_text())
     return data.get("messages", [])
+
+
+def _read_full(ctx: PipelineContext) -> dict:
+    """Return the full top-level JSON object from the conversation file."""
+    p = ctx.conv_path
+    if not p.exists():
+        return {}
+    return json.loads(p.read_text())
+
+
+# ---------------------------------------------------------------------------
+# Provider/session_state test fixtures
+# ---------------------------------------------------------------------------
+
+# Keyed by provider name, mirroring get_provider_settings()'s return shape.
+# anthropic's model/max_tokens deliberately match PipelineContext's constructor
+# defaults ("claude-3-7-sonnet-latest" / 4096) so the plain `ctx` fixture starts
+# out "in sync" with config and unrelated tests don't see spurious model/
+# max_tokens diffs.
+_MOCK_PROVIDER_SETTINGS = {
+    "anthropic": {
+        "api_key": "anthropic-key",
+        "api_key_file": None,
+        "model": "claude-3-7-sonnet-latest",
+        "max_tokens": 4096,
+    },
+    "openai": {
+        "api_key": "openai-key",
+        "api_key_file": "/configured/openai-key-file",
+        "model": "gpt-default",
+        "max_tokens": 8192,
+    },
+    "openai-reasoning": {
+        "api_key": "openai-key",
+        "api_key_file": "/configured/openai-key-file",
+        "model": "o3-default",
+        "max_tokens": 16384,
+    },
+}
+
+
+def _fake_get_provider_settings(provider: str) -> dict:
+    return _MOCK_PROVIDER_SETTINGS[provider]
+
+
+@pytest.fixture
+def patch_provider_config():
+    """
+    Patches aiv.commands.get_config/get_provider_settings so
+    cmd_set_provider/cmd_set_model/cmd_set_max_tokens/cmd_set_sys_prompt/
+    cmd_set_prompt_suffix/cmd_set_api_key_file/apply_session_state can run
+    without a real config.toml on disk. Default active provider is
+    "anthropic", matching _MOCK_PROVIDER_SETTINGS["anthropic"].
+
+    sys_prompt/mode_chat_suffix/mode_code_suffix are deliberately omitted from
+    the mocked config dict — _sync_session_state/apply_session_state fall back
+    to the real DEFAULT_SYS_PROMPT/DEFAULT_MODE_CHAT_SUFFIX/
+    DEFAULT_MODE_CODE_SUFFIX constants via config.get(key, DEFAULT), which is
+    fine for provider/model/max_tokens/api_key_file-focused tests. Tests that
+    specifically exercise sys_prompt/suffix diffing set an explicit non-default
+    value and assert on that, so they don't depend on matching a particular
+    baseline.
+    """
+    with (
+        patch(
+            "aiv.commands.get_config",
+            return_value={"provider": "anthropic", "sys_prompt": ""},
+        ),
+        patch(
+            "aiv.commands.get_provider_settings",
+            side_effect=_fake_get_provider_settings,
+        ),
+    ):
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +301,51 @@ class TestCommandsFromArgs:
         assert isinstance(cmds[0], ShowCommand)
         assert cmds[0].args == "2 user"
 
+    def test_provider_flag(self):
+        args = make_args(provider="openai")
+        cmds = commands_from_args(args)
+        assert len(cmds) == 1
+        assert isinstance(cmds[0], SetProviderCommand)
+        assert cmds[0].provider == "openai"
+
+    def test_api_key_file_flag(self, tmp_path):
+        key_file = str(tmp_path / "key.txt")
+        args = make_args(api_key_file=key_file)
+        cmds = commands_from_args(args)
+        assert len(cmds) == 1
+        assert isinstance(cmds[0], SetApiKeyFileCommand)
+        assert cmds[0].path == Path(key_file).expanduser()
+
+    def test_provider_precedence_before_model(self):
+        # !provider (precedence=19) must run before !model (precedence=20)
+        # since cmd_set_provider pulls a default model as a side effect.
+        args = make_args(provider="openai", model="custom-model")
+        cmds = commands_from_args(args)
+        assert isinstance(cmds[0], SetProviderCommand)
+        assert isinstance(cmds[1], SetModelCommand)
+
+    def test_provider_precedence_before_api_key_file(self, tmp_path):
+        key_file = str(tmp_path / "key.txt")
+        args = make_args(provider="openai", api_key_file=key_file)
+        cmds = commands_from_args(args)
+        assert isinstance(cmds[0], SetProviderCommand)
+        assert isinstance(cmds[1], SetApiKeyFileCommand)
+
+    def test_provider_precedence_before_max_tokens(self):
+        args = make_args(provider="openai", max_tokens="9000")
+        cmds = commands_from_args(args)
+        assert isinstance(cmds[0], SetProviderCommand)
+        assert isinstance(cmds[1], SetMaxTokensCommand)
+
+    def test_mode_precedence_before_prompt_suffix(self):
+        # !suffix (precedence=25) must run after !code/!chat (precedence=20)
+        # so ctx.mode already reflects the target mode when the suffix command
+        # runs, enabling the CHAT/CODE-in-place edit behavior.
+        args = make_args(code=True, prompt_suffix="be terse")
+        cmds = commands_from_args(args)
+        assert isinstance(cmds[0], SetModeCommand)
+        assert isinstance(cmds[1], SetPromptSuffixCommand)
+
     def test_precedence_ordering(self):
         # reset (10) < chat (20) < context (30) < prompt (40)
         args = make_args(
@@ -309,8 +433,6 @@ class TestRenderOutput:
 
 class TestPipelineContextMode:
     def test_default_mode_suffix_is_empty(self, ctx):
-        # DEFAULT mode — no config available in tests, but suffix should be ""
-        # without hitting get_config() since DEFAULT returns "" directly
         assert ctx.mode == InteractionMode.DEFAULT
         assert ctx.mode_suffix == ""
 
@@ -322,19 +444,19 @@ class TestPipelineContextMode:
     def test_setting_mode_clears_custom_suffix(self, ctx):
         ctx.mode_suffix = "be concise"
         assert ctx.mode == InteractionMode.CUSTOM
-        # Switching back to DEFAULT must clear the override
         ctx.mode = InteractionMode.DEFAULT
         assert ctx.mode == InteractionMode.DEFAULT
         assert ctx.mode_suffix == ""
 
     def test_setting_mode_to_custom_clears_suffix(self, ctx):
         ctx.mode_suffix = "be concise"
-        # Explicitly setting mode to CUSTOM (not via mode_suffix setter) clears suffix
         ctx.mode = InteractionMode.CUSTOM
         assert ctx.mode_suffix == ""
 
     def test_mode_suffix_setter_prepends_newlines_via_cmd(self, ctx):
-        # cmd_set_prompt_suffix prepends "\n\n" before storing
+        # ctx starts in DEFAULT mode, so this takes the ephemeral
+        # CUSTOM-forcing branch — no patch_provider_config needed since that
+        # branch never calls _sync_session_state.
         from aiv.commands import cmd_set_prompt_suffix
         from aiv.models import SetPromptSuffixCommand
 
@@ -344,7 +466,6 @@ class TestPipelineContextMode:
         assert ctx.mode == InteractionMode.CUSTOM
 
     def test_mode_suffix_none_suffix_is_noop(self, ctx):
-        # SetPromptSuffixCommand with suffix=None must not change anything
         from aiv.commands import cmd_set_prompt_suffix
         from aiv.models import SetPromptSuffixCommand
 
@@ -365,7 +486,6 @@ class TestPipelineContextMode:
         ctx.mode_suffix = "custom instructions"
         ctx.model = "claude-3-5-haiku-latest"
         ctx.max_tokens = 1024
-        # Changing unrelated fields must not disturb mode or suffix
         assert ctx.mode == InteractionMode.CUSTOM
         assert ctx.mode_suffix == "custom instructions"
 
@@ -377,37 +497,36 @@ class TestPipelineContextMode:
 
     def test_clearing_suffix_with_empty_string(self, ctx):
         ctx.mode_suffix = "something"
-        # Setting to "" explicitly — mode becomes CUSTOM but suffix is empty string
         ctx.mode_suffix = ""
         assert ctx.mode == InteractionMode.CUSTOM
         assert ctx.mode_suffix == ""
 
-    def test_code_mode_suffix_lazy_via_config(self, ctx):
-        # CODE mode suffix is derived lazily from config; mock get_config so
-        # tests don't require a real config file on disk
-        with patch(
-            "aiv.models.get_config", return_value={"mode_code_suffix": "# code only"}
-        ):
-            ctx.mode = InteractionMode.CODE
-            assert ctx.mode_suffix == "# code only"
+    def test_code_mode_suffix_reads_ctx_field(self, tmp_conv_path):
+        # mode_suffix's getter no longer calls get_config() at all — it reads
+        # ctx.mode_code_suffix, a real field set at construction (or mutated
+        # directly by cmd_set_prompt_suffix while in CODE mode).
+        ctx = PipelineContext(api_key="test", mode_code_suffix="# code only")
+        ctx.conv_path = tmp_conv_path
+        ctx.mode = InteractionMode.CODE
+        assert ctx.mode_suffix == "# code only"
 
-    def test_chat_mode_suffix_lazy_via_config(self, ctx):
-        with patch(
-            "aiv.models.get_config", return_value={"mode_chat_suffix": "be friendly"}
-        ):
-            ctx.mode = InteractionMode.CHAT
-            assert ctx.mode_suffix == "be friendly"
+    def test_chat_mode_suffix_reads_ctx_field(self, tmp_conv_path):
+        ctx = PipelineContext(api_key="test", mode_chat_suffix="be friendly")
+        ctx.conv_path = tmp_conv_path
+        ctx.mode = InteractionMode.CHAT
+        assert ctx.mode_suffix == "be friendly"
 
-    def test_code_mode_suffix_missing_key_returns_empty(self, ctx):
-        # If the config key is absent, fall back to ""
-        with patch("aiv.models.get_config", return_value={}):
-            ctx.mode = InteractionMode.CODE
-            assert ctx.mode_suffix == ""
+    def test_code_mode_suffix_empty_field_returns_empty(self, tmp_conv_path):
+        ctx = PipelineContext(api_key="test", mode_code_suffix="")
+        ctx.conv_path = tmp_conv_path
+        ctx.mode = InteractionMode.CODE
+        assert ctx.mode_suffix == ""
 
-    def test_chat_mode_suffix_missing_key_returns_empty(self, ctx):
-        with patch("aiv.models.get_config", return_value={}):
-            ctx.mode = InteractionMode.CHAT
-            assert ctx.mode_suffix == ""
+    def test_chat_mode_suffix_empty_field_returns_empty(self, tmp_conv_path):
+        ctx = PipelineContext(api_key="test", mode_chat_suffix="")
+        ctx.conv_path = tmp_conv_path
+        ctx.mode = InteractionMode.CHAT
+        assert ctx.mode_suffix == ""
 
 
 # ---------------------------------------------------------------------------
@@ -449,7 +568,7 @@ class TestCmdSetMode:
 
 
 class TestCmdSetters:
-    def test_set_model(self, ctx):
+    def test_set_model(self, ctx, patch_provider_config):
         from aiv.commands import cmd_set_model
         from aiv.models import SetModelCommand
 
@@ -466,7 +585,7 @@ class TestCmdSetters:
         cmd_set_model(cmd, ctx)
         assert ctx.model == original
 
-    def test_set_max_tokens(self, ctx):
+    def test_set_max_tokens(self, ctx, patch_provider_config):
         from aiv.commands import cmd_set_max_tokens
         from aiv.models import SetMaxTokensCommand
 
@@ -483,7 +602,27 @@ class TestCmdSetters:
         cmd_set_max_tokens(cmd, ctx)
         assert ctx.max_tokens == original
 
-    def test_set_sys_prompt(self, ctx):
+    def test_set_max_tokens_persists_diff(self, ctx, patch_provider_config):
+        from aiv.commands import cmd_set_max_tokens
+        from aiv.models import SetMaxTokensCommand
+
+        cmd_set_max_tokens(SetMaxTokensCommand(max_tokens=777), ctx)
+        data = _read_full(ctx)
+        assert data["session_state"]["max_tokens"] == 777
+
+    def test_set_max_tokens_matching_default_omits_session_state(
+        self, ctx, patch_provider_config
+    ):
+        from aiv.commands import cmd_set_max_tokens
+        from aiv.models import SetMaxTokensCommand
+
+        # anthropic's mocked default max_tokens is 4096, matching ctx's initial
+        # value, so setting it explicitly to the same value should not persist.
+        cmd_set_max_tokens(SetMaxTokensCommand(max_tokens=4096), ctx)
+        data = _read_full(ctx)
+        assert "session_state" not in data
+
+    def test_set_sys_prompt(self, ctx, patch_provider_config):
         from aiv.commands import cmd_set_sys_prompt
         from aiv.models import SetSysPromptCommand
 
@@ -499,6 +638,279 @@ class TestCmdSetters:
         cmd = SetSysPromptCommand(sys_prompt=None)
         cmd_set_sys_prompt(cmd, ctx)
         assert ctx.sys_prompt == original
+
+    def test_set_sys_prompt_persists_diff(self, ctx, patch_provider_config):
+        from aiv.commands import cmd_set_sys_prompt
+        from aiv.models import SetSysPromptCommand
+
+        cmd_set_sys_prompt(SetSysPromptCommand(sys_prompt="you are a pirate"), ctx)
+        data = _read_full(ctx)
+        assert data["session_state"]["sys_prompt"] == "you are a pirate"
+
+
+# ---------------------------------------------------------------------------
+# cmd_set_provider
+# ---------------------------------------------------------------------------
+
+
+class TestCmdSetProvider:
+    def test_set_provider_updates_model_key_and_max_tokens(
+        self, ctx, patch_provider_config
+    ):
+        from aiv.commands import cmd_set_provider
+
+        cmd_set_provider(SetProviderCommand(provider="openai"), ctx)
+        assert ctx.provider == "openai"
+        assert ctx.model == "gpt-default"
+        assert ctx.api_key == "openai-key"
+        assert ctx.api_key_file == Path("/configured/openai-key-file")
+        assert ctx.max_tokens == 8192
+
+    def test_set_provider_none_is_noop(self, ctx, patch_provider_config):
+        from aiv.commands import cmd_set_provider
+
+        original_provider = ctx.provider
+        cmd_set_provider(SetProviderCommand(provider=None), ctx)
+        assert ctx.provider == original_provider
+
+    def test_set_provider_invalid_is_rejected(self, ctx, patch_provider_config):
+        from aiv.commands import cmd_set_provider
+
+        original_provider = ctx.provider
+        cmd_set_provider(SetProviderCommand(provider="not-a-real-provider"), ctx)
+        assert ctx.provider == original_provider
+
+    def test_set_provider_persists_session_state_diff(self, ctx, patch_provider_config):
+        from aiv.commands import cmd_set_provider
+
+        cmd_set_provider(SetProviderCommand(provider="openai"), ctx)
+        data = _read_full(ctx)
+        assert data["session_state"]["provider"] == "openai"
+        # max_tokens is NOT asserted here: cmd_set_provider pulls openai's own
+        # configured default (8192) as part of the switch, so ctx.max_tokens
+        # matches get_provider_settings("openai")["max_tokens"] exactly and is
+        # correctly omitted from the diff — there's no override to record.
+
+    def test_default_provider_omits_session_state(self, ctx, patch_provider_config):
+        from aiv.commands import cmd_set_provider
+
+        cmd_set_provider(SetProviderCommand(provider="anthropic"), ctx)
+        data = _read_full(ctx)
+        assert "session_state" not in data
+
+    def test_switching_back_to_default_clears_session_state(
+        self, ctx, patch_provider_config
+    ):
+        from aiv.commands import cmd_set_provider
+
+        cmd_set_provider(SetProviderCommand(provider="openai"), ctx)
+        cmd_set_provider(SetProviderCommand(provider="anthropic"), ctx)
+        data = _read_full(ctx)
+        assert "session_state" not in data
+
+    def test_switching_provider_drops_prior_model_override(
+        self, ctx, patch_provider_config
+    ):
+        from aiv.commands import cmd_set_provider, cmd_set_model
+
+        cmd_set_provider(SetProviderCommand(provider="openai"), ctx)
+        cmd_set_model(SetModelCommand(model="custom-model"), ctx)
+        cmd_set_provider(SetProviderCommand(provider="anthropic"), ctx)
+        cmd_set_provider(SetProviderCommand(provider="openai"), ctx)
+        assert ctx.model == "gpt-default"
+
+    def test_switching_provider_drops_prior_max_tokens_override(
+        self, ctx, patch_provider_config
+    ):
+        from aiv.commands import cmd_set_provider, cmd_set_max_tokens
+
+        cmd_set_provider(SetProviderCommand(provider="openai"), ctx)
+        cmd_set_max_tokens(SetMaxTokensCommand(max_tokens=99999), ctx)
+        cmd_set_provider(SetProviderCommand(provider="anthropic"), ctx)
+        cmd_set_provider(SetProviderCommand(provider="openai"), ctx)
+        assert ctx.max_tokens == 8192
+
+
+# ---------------------------------------------------------------------------
+# cmd_set_api_key_file
+# ---------------------------------------------------------------------------
+
+
+class TestCmdSetApiKeyFile:
+    def test_sets_api_key_and_file(self, ctx, tmp_path, patch_provider_config):
+        from aiv.commands import cmd_set_api_key_file
+
+        key_file = tmp_path / "key.txt"
+        key_file.write_text("secret-key-value\n")
+        cmd_set_api_key_file(SetApiKeyFileCommand(path=key_file), ctx)
+        assert ctx.api_key == "secret-key-value"
+        assert ctx.api_key_file == key_file
+
+    def test_missing_file_is_rejected(self, ctx, tmp_path, patch_provider_config):
+        from aiv.commands import cmd_set_api_key_file
+
+        original_key = ctx.api_key
+        cmd_set_api_key_file(
+            SetApiKeyFileCommand(path=tmp_path / "nonexistent.txt"), ctx
+        )
+        assert ctx.api_key == original_key
+        assert ctx.api_key_file is None
+
+    def test_missing_file_does_not_touch_conversation_file(
+        self, ctx, tmp_path, patch_provider_config
+    ):
+        from aiv.commands import cmd_set_api_key_file
+
+        cmd_set_api_key_file(
+            SetApiKeyFileCommand(path=tmp_path / "nonexistent.txt"), ctx
+        )
+        assert not ctx.conv_path.exists()
+
+    def test_valid_file_persists_session_state(
+        self, ctx, tmp_path, patch_provider_config
+    ):
+        from aiv.commands import cmd_set_api_key_file
+
+        key_file = tmp_path / "key.txt"
+        key_file.write_text("secret\n")
+        cmd_set_api_key_file(SetApiKeyFileCommand(path=key_file), ctx)
+        data = _read_full(ctx)
+        assert data["session_state"]["api_key_file"] == str(key_file.expanduser())
+
+
+# ---------------------------------------------------------------------------
+# cmd_set_prompt_suffix — mode-dependent branching
+# ---------------------------------------------------------------------------
+
+
+class TestCmdSetPromptSuffixModeDependent:
+    def test_chat_mode_edits_in_place_and_persists(self, ctx, patch_provider_config):
+        from aiv.commands import cmd_set_mode, cmd_set_prompt_suffix
+        from aiv.models import SetModeCommand
+
+        cmd_set_mode(SetModeCommand(mode=InteractionMode.CHAT), ctx)
+        cmd_set_prompt_suffix(SetPromptSuffixCommand(suffix="be extra cheerful"), ctx)
+
+        assert ctx.mode == InteractionMode.CHAT  # mode is NOT forced to CUSTOM
+        assert ctx.mode_chat_suffix == "\n\nbe extra cheerful"
+        data = _read_full(ctx)
+        assert data["session_state"]["mode_chat_suffix"] == "\n\nbe extra cheerful"
+
+    def test_code_mode_edits_in_place_and_persists(self, ctx, patch_provider_config):
+        from aiv.commands import cmd_set_mode, cmd_set_prompt_suffix
+        from aiv.models import SetModeCommand
+
+        cmd_set_mode(SetModeCommand(mode=InteractionMode.CODE), ctx)
+        cmd_set_prompt_suffix(SetPromptSuffixCommand(suffix="no comments at all"), ctx)
+
+        assert ctx.mode == InteractionMode.CODE  # mode is NOT forced to CUSTOM
+        assert ctx.mode_code_suffix == "\n\nno comments at all"
+        data = _read_full(ctx)
+        assert data["session_state"]["mode_code_suffix"] == "\n\nno comments at all"
+
+    def test_default_mode_takes_ephemeral_path_and_does_not_persist(
+        self, ctx, patch_provider_config
+    ):
+        from aiv.commands import cmd_set_prompt_suffix
+
+        assert ctx.mode == InteractionMode.DEFAULT
+        cmd_set_prompt_suffix(SetPromptSuffixCommand(suffix="reply in Portuguese"), ctx)
+
+        assert ctx.mode == InteractionMode.CUSTOM
+        assert ctx.mode_suffix == "\n\nreply in Portuguese"
+        data = _read_full(ctx)
+        assert "session_state" not in data
+
+    def test_custom_mode_takes_ephemeral_path_and_does_not_persist(
+        self, ctx, patch_provider_config
+    ):
+        from aiv.commands import cmd_set_prompt_suffix
+
+        ctx.mode_suffix = "first override"  # forces CUSTOM
+        cmd_set_prompt_suffix(SetPromptSuffixCommand(suffix="second override"), ctx)
+
+        assert ctx.mode == InteractionMode.CUSTOM
+        assert ctx.mode_suffix == "\n\nsecond override"
+        data = _read_full(ctx)
+        assert "session_state" not in data
+
+    def test_switching_away_from_chat_preserves_other_modes_override(
+        self, ctx, patch_provider_config
+    ):
+        # Setting a CHAT override, then a CODE override, must leave BOTH
+        # persisted simultaneously — _sync_session_state diffs both fields
+        # unconditionally, not just whichever mode is currently active.
+        from aiv.commands import cmd_set_mode, cmd_set_prompt_suffix
+        from aiv.models import SetModeCommand
+
+        cmd_set_mode(SetModeCommand(mode=InteractionMode.CHAT), ctx)
+        cmd_set_prompt_suffix(SetPromptSuffixCommand(suffix="chat override"), ctx)
+        cmd_set_mode(SetModeCommand(mode=InteractionMode.CODE), ctx)
+        cmd_set_prompt_suffix(SetPromptSuffixCommand(suffix="code override"), ctx)
+
+        data = _read_full(ctx)
+        assert data["session_state"]["mode_chat_suffix"] == "\n\nchat override"
+        assert data["session_state"]["mode_code_suffix"] == "\n\ncode override"
+
+
+# ---------------------------------------------------------------------------
+# apply_session_state
+# ---------------------------------------------------------------------------
+
+
+class TestApplySessionState:
+    def test_defaults_when_no_session_state(self, ctx, patch_provider_config):
+        from aiv.commands import apply_session_state
+
+        apply_session_state(ctx)
+        assert ctx.provider == "anthropic"
+        assert ctx.model == "claude-3-7-sonnet-latest"
+        assert ctx.api_key == "anthropic-key"
+        assert ctx.max_tokens == 4096
+
+    def test_picks_up_persisted_provider_override(self, ctx, patch_provider_config):
+        from aiv.commands import cmd_set_provider, apply_session_state
+
+        cmd_set_provider(SetProviderCommand(provider="openai"), ctx)
+
+        # Simulate a fresh process re-reading the conversation file from scratch
+        fresh_ctx = PipelineContext(api_key="")
+        fresh_ctx.conv_path = ctx.conv_path
+        apply_session_state(fresh_ctx)
+        assert fresh_ctx.provider == "openai"
+        assert fresh_ctx.model == "gpt-default"
+        assert fresh_ctx.api_key == "openai-key"
+        assert fresh_ctx.max_tokens == 8192
+
+    def test_picks_up_persisted_sys_prompt_and_suffixes(
+        self, ctx, patch_provider_config
+    ):
+        from aiv.commands import (
+            cmd_set_mode,
+            cmd_set_sys_prompt,
+            cmd_set_prompt_suffix,
+            apply_session_state,
+        )
+        from aiv.models import SetModeCommand
+
+        cmd_set_sys_prompt(SetSysPromptCommand(sys_prompt="pirate mode"), ctx)
+        cmd_set_mode(SetModeCommand(mode=InteractionMode.CHAT), ctx)
+        cmd_set_prompt_suffix(SetPromptSuffixCommand(suffix="chat override"), ctx)
+
+        fresh_ctx = PipelineContext(api_key="")
+        fresh_ctx.conv_path = ctx.conv_path
+        apply_session_state(fresh_ctx)
+        assert fresh_ctx.sys_prompt == "pirate mode"
+        assert fresh_ctx.mode_chat_suffix == "\n\nchat override"
+
+    def test_raises_on_missing_api_key_file(self, ctx, tmp_path, patch_provider_config):
+        from aiv.commands import apply_session_state
+        from aiv.conversation import save_session_state
+
+        missing = tmp_path / "gone.txt"
+        save_session_state({"api_key_file": str(missing)}, ctx.conv_path)
+        with pytest.raises(FileNotFoundError):
+            apply_session_state(ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -516,17 +928,12 @@ class TestWorkingDirectory:
         assert os.getcwd() == str(tmp_path)
 
     def test_setter_invalidates_conv_path_cache(self, ctx, tmp_path):
-        # Prime the cache
         _ = ctx.conv_path
         assert ctx._conv_path is not None
-        # Changing directory must clear it
         ctx.working_directory = tmp_path
         assert ctx._conv_path is None
 
     def test_conv_path_reresolved_after_directory_change(self, tmp_path):
-        # Core regression test for the lru_cache bug on _resolve_git_root:
-        # conv_path must be re-resolved after working_directory changes, not
-        # served from a stale cache that reflects the old directory.
         dir_a = tmp_path / "a"
         dir_b = tmp_path / "b"
         dir_a.mkdir()
@@ -534,25 +941,18 @@ class TestWorkingDirectory:
 
         ctx = PipelineContext(api_key="test")
 
-        # Mock _resolve_git_root so the test is not sensitive to whether the
-        # test suite runs inside a real git repo
         with patch("aiv.conversation._resolve_git_root", return_value=None):
             os.chdir(dir_a)
             ctx._conv_path = None
             path_a = ctx.conv_path
 
             ctx.working_directory = dir_b
-            # _conv_path must have been cleared by the setter
             assert ctx._conv_path is None
             path_b = ctx.conv_path
 
-        # Both resolve to the fallback; the important assertion is that
-        # _conv_path was None between the two reads (checked above)
         assert path_a == path_b
 
     def test_explicit_conv_path_cleared_by_directory_change(self, ctx, tmp_path):
-        # An explicitly set conv_path is treated as a cache entry — changing
-        # working_directory invalidates it so the next read re-resolves
         explicit = tmp_path / "explicit.json"
         ctx.conv_path = explicit
         assert ctx._conv_path == explicit
@@ -600,8 +1000,6 @@ class TestWorkingDirectory:
 
         ctx.interactive = True
         cmd = WorkingDirectoryCommand(dir=tmp_path)
-        # Should raise StopPipeline; output goes to info console — just verify no crash
-        # and cwd was updated
         raised = False
         try:
             cmd_working_directory(cmd, ctx)
@@ -631,11 +1029,9 @@ class TestAdjustRange:
         assert _adjust_range("3:7", 2) == "3:5"
 
     def test_no_colon(self):
-        # Single number — open ended, leave unchanged
         assert _adjust_range("45", 3) == "45"
 
     def test_open_end(self):
-        # "N:" open end — leave unchanged
         assert _adjust_range("3:", 2) == "3:"
 
     def test_non_numeric_end(self):
@@ -666,7 +1062,6 @@ class TestApplyLeadingWs:
         assert _apply_leading_ws("  foo", "") == ""
 
     def test_empty_body(self):
-        # No non-empty body line → leading = "" → strips leading ws from response first line
         result = _apply_leading_ws("", "  foo\n")
         assert result == "foo\n"
 
@@ -703,7 +1098,6 @@ class TestExtractStdinMarkerFound:
         assert mock_rt.call_args.kwargs["prompt"] == "give me this back"
 
     def test_range_adjusted(self, tmp_conv):
-        # 1 prompt line in range 1:5 → adjusted to 1:4
         raw = "  ## prompt: do something\n  a\n  b\n  c\n  d\n"
         tmp_conv.stdin_data = raw
         cmd = ExtractPromptContextCommand(path="-", ctx_file="f.py", ctx_range="1:5")
@@ -720,7 +1114,7 @@ class TestExtractStdinMarkerFound:
         assert capsys.readouterr().out.endswith("\n")
 
     def test_no_trailing_newline_not_added(self, tmp_conv, capsys):
-        raw = "## prompt: return x\nx = 1"  # no trailing newline
+        raw = "## prompt: return x\nx = 1"
         tmp_conv.stdin_data = raw
         cmd = ExtractPromptContextCommand(path="-")
         with patch("aiv.commands.run_turn", return_value="x = 1\n"):
@@ -742,8 +1136,6 @@ class TestExtractStdinMarkerFound:
         with patch("aiv.commands.run_turn", return_value="foo = 1"):
             cmd_extract_prompt_context(cmd, tmp_conv)
         messages = _read_conv(tmp_conv)
-        # cmd_extract_prompt_context appends exactly one context turn itself;
-        # run_turn is mocked so prompt+assistant turns are not written
         assert len(messages) == 1
         content = messages[0]["message"]["content"]
         assert "## prompt:" not in content
@@ -756,7 +1148,6 @@ class TestExtractStdinMarkerFound:
         with patch("aiv.commands.run_turn", return_value="foo = 1"):
             cmd_extract_prompt_context(cmd, tmp_conv)
         content = _read_conv(tmp_conv)[0]["message"]["content"]
-        # range adjusted by 1 prompt line: 10:11 → 10:10
         assert "x.py:10:10" in content
 
 
@@ -830,7 +1221,6 @@ class TestExtractFile:
     def test_range_adjusted(self, tmp_conv, tmp_path):
         f = tmp_path / "test.py"
         f.write_text("## prompt: do it\na\nb\nc\n")
-        # 1 prompt line, range 1:4 → adjusted to 1:3
         cmd = ExtractPromptContextCommand(path=str(f), ctx_range="1:4")
         with patch("aiv.commands.run_turn", return_value="a\nb\nc"):
             cmd_extract_prompt_context(cmd, tmp_conv)
@@ -878,3 +1268,25 @@ class TestCliStdinRouting:
             for c in context_files + extract_files
         )
         assert has_explicit_stdin_context is True
+
+
+# Caveat: the four TestPipelineContextMode tests that previously patched
+# aiv.models.get_config to exercise CHAT/CODE suffix resolution
+# (test_code_mode_suffix_lazy_via_config, test_chat_mode_suffix_lazy_via_config,
+# test_code_mode_suffix_missing_key_returns_empty,
+# test_chat_mode_suffix_missing_key_returns_empty) have been replaced with
+# test_{code,chat}_mode_suffix_reads_ctx_field and
+# test_{code,chat}_mode_suffix_empty_field_returns_empty, since mode_suffix's
+# getter no longer calls get_config() at all — it reads real ctx fields set at
+# construction. These new tests construct PipelineContext directly with
+# mode_chat_suffix=/mode_code_suffix= kwargs instead.
+#
+# Caveat: TestCmdSetters.test_set_model/test_set_max_tokens/test_set_sys_prompt
+# now require patch_provider_config since all three call _sync_session_state,
+# which calls get_config()/get_provider_settings() — without the fixture they'd
+# hit the real config file (or raise FileNotFoundError).
+#
+# Caveat: new TestCmdSetPromptSuffixModeDependent class covers the three-way
+# branch added to cmd_set_prompt_suffix (CHAT in-place+persist / CODE in-place
+# +persist / DEFAULT+CUSTOM ephemeral+no-persist) plus the "both modes'
+# overrides survive independently" case flagged as a design risk earlier.

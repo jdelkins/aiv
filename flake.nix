@@ -29,6 +29,7 @@
             (pkgs.python3.withPackages (
               ps: with ps; [
                 anthropic
+                openai
                 prompt-toolkit
                 rich
                 pytest

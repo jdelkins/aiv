@@ -26,17 +26,13 @@ python3Packages.buildPythonApplication {
 
   src = ./.;
 
-  build-system = with python3Packages; [
-    setuptools
-  ];
+  build-system = [ python3Packages.setuptools ];
 
   dependencies = pyDeps;
 
-  nativeBuildInputs = [
-    git
-  ];
+  nativeBuildInputs = [ git ];
 
-  nativeCheckInputs = with python3Packages; [ pytest ];
+  nativeCheckInputs = [ python3Packages.pytest ];
 
   doCheck = true;
 

@@ -1,47 +1,11 @@
 from __future__ import annotations
 from aiv.models import InteractionMode
 
-import anthropic
 from pathlib import Path
 
 from aiv.content import build_user_content
-from aiv.conversation import append_user_turn, save_conversation
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-def _call_api(
-    messages: list,
-    model: str,
-    max_tokens: int,
-    sys_prompt: str,
-    api_key: str,
-) -> tuple[str, str | None]:
-    """
-    Call the Anthropic API with the given messages and return
-    (response_text, stop_reason).
-    Streams the response for lower latency on long outputs.
-    stop_reason is Optional in the SDK's types (None while streaming/incomplete
-    states), hence the str | None return type rather than str.
-    """
-    client = anthropic.Anthropic(api_key=api_key)
-
-    with client.messages.stream(
-        model=model,
-        max_tokens=max_tokens,
-        messages=messages,
-        system=sys_prompt,
-        cache_control={"type": "ephemeral"},
-    ) as stream:
-        response_text = ""
-        for text in stream.text_stream:
-            response_text += text
-        final_message = stream.get_final_message()
-
-    return response_text, final_message.stop_reason
+from aiv.conversation import append_user_turn, save_conversation, GenericMessageParam
+from aiv.providers import get_provider
 
 
 # ---------------------------------------------------------------------------
@@ -57,13 +21,15 @@ def run_turn(
     mode_suffix: str,
     api_key: str,
     model: str,
+    provider: str,
     max_tokens: int,
     sys_prompt: str,
     conv_path: Path,
 ) -> str:
     """
-    Build a user turn, append it to the conversation, call the Anthropic API,
-    append the assistant response, save, and return the response text.
+    Build a user turn, append it to the conversation, call the selected
+    provider's API, append the assistant response, save, and return the
+    response text.
 
     conv_path is now an explicit parameter (resolved once in PipelineContext)
     rather than being re-resolved on every call.
@@ -73,9 +39,10 @@ def run_turn(
     """
     content = build_user_content(prompt, context_files, stdin_data, mode_suffix)
     messages = append_user_turn(mode, content, conv_path)
-    msgparams = [m["message"] for m in messages]
+    msgparams: list[GenericMessageParam] = [m["message"] for m in messages]
 
-    response_text, stop_reason = _call_api(
+    impl = get_provider(provider)
+    response_text, stop_reason = impl.call(
         messages=msgparams,
         model=model,
         max_tokens=max_tokens,

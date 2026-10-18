@@ -16,6 +16,9 @@ from aiv.conversation import (
     validate_conversation,
     load_conversation,
     save_conversation,
+    reset_conversation,
+    load_session_state,
+    save_session_state,
     StoredMessage,
 )
 
@@ -453,15 +456,115 @@ class TestLoadConversation:
         with pytest.raises(SystemExit):
             load_conversation(p)
 
-    def test_missing_messages_key_warns(self, tmp_path, capsys):
+    def test_empty_object_returns_empty_no_warning(self, tmp_path, capsys):
+        # A bare {} (no messages key, no other keys) is now treated as an
+        # empty conversation silently — _read_raw returning {} is a legitimate
+        # "file has nothing in it yet" state, not a malformed-file warning.
         p = tmp_path / "conv.json"
         p.write_text("{}")
         result = load_conversation(p)
         assert result == []
-        assert "warning" in capsys.readouterr().err.lower()
+
+    def test_session_state_only_file_returns_empty_messages(self, tmp_path):
+        # A file containing only session_state (no messages key at all) is a
+        # legitimate shape — e.g. produced by cmd_set_provider before any
+        # prompt has ever been sent. Must not warn or exit.
+        p = tmp_path / "conv.json"
+        p.write_text(json.dumps({"session_state": {"provider": "openai"}}))
+        assert load_conversation(p) == []
 
     def test_messages_not_list_exits(self, tmp_path):
         p = tmp_path / "conv.json"
         p.write_text(json.dumps({"messages": "oops"}))
         with pytest.raises(SystemExit):
             load_conversation(p)
+
+
+# ---------------------------------------------------------------------------
+# save_conversation — preserves session_state (read-modify-write contract)
+# ---------------------------------------------------------------------------
+
+
+class TestSaveConversationPreservesSessionState:
+    def test_save_does_not_clobber_existing_session_state(self, tmp_path):
+        p = tmp_path / "conv.json"
+        save_session_state({"provider": "openai"}, p)
+
+        msgs: list[StoredMessage] = [
+            {"mode": InteractionMode.CHAT, "message": {"role": "user", "content": "hi"}}
+        ]
+        save_conversation(msgs, p)
+
+        data = json.loads(p.read_text())
+        assert data["session_state"] == {"provider": "openai"}
+        assert data["messages"] == msgs
+
+    def test_reset_conversation_preserves_session_state(self, tmp_path):
+        # reset_conversation only clears messages; session_state is orthogonal
+        # and must survive a reset (per design discussion).
+        p = tmp_path / "conv.json"
+        save_session_state({"provider": "openai", "model": "custom"}, p)
+        msgs: list[StoredMessage] = [
+            {"mode": InteractionMode.CHAT, "message": {"role": "user", "content": "hi"}}
+        ]
+        save_conversation(msgs, p)
+
+        reset_conversation(p)
+
+        data = json.loads(p.read_text())
+        assert data["messages"] == []
+        assert data["session_state"] == {"provider": "openai", "model": "custom"}
+
+
+# ---------------------------------------------------------------------------
+# load_session_state / save_session_state
+# ---------------------------------------------------------------------------
+
+
+class TestSessionState:
+    def test_missing_file_returns_empty(self, tmp_path):
+        assert load_session_state(tmp_path / "nope.json") == {}
+
+    def test_no_session_state_key_returns_empty(self, tmp_path):
+        p = tmp_path / "conv.json"
+        save_conversation([], p)
+        assert load_session_state(p) == {}
+
+    def test_round_trip(self, tmp_path):
+        p = tmp_path / "conv.json"
+        state = {"provider": "openai", "model": "custom-model"}
+        save_session_state(state, p)
+        assert load_session_state(p) == state
+
+    def test_falsy_state_removes_key(self, tmp_path):
+        p = tmp_path / "conv.json"
+        save_session_state({"provider": "openai"}, p)
+        save_session_state(None, p)
+        data = json.loads(p.read_text())
+        assert "session_state" not in data
+
+    def test_empty_dict_removes_key(self, tmp_path):
+        p = tmp_path / "conv.json"
+        save_session_state({"provider": "openai"}, p)
+        save_session_state({}, p)
+        data = json.loads(p.read_text())
+        assert "session_state" not in data
+
+    def test_malformed_session_state_warns_and_returns_empty(self, tmp_path, capsys):
+        p = tmp_path / "conv.json"
+        p.write_text(json.dumps({"session_state": "not-an-object"}))
+        result = load_session_state(p)
+        assert result == {}
+        assert "session_state" in capsys.readouterr().err.lower()
+
+    def test_preserves_messages_alongside_session_state(self, tmp_path):
+        p = tmp_path / "conv.json"
+        msgs: list[StoredMessage] = [
+            {"mode": InteractionMode.CHAT, "message": {"role": "user", "content": "hi"}}
+        ]
+        save_conversation(msgs, p)
+        save_session_state({"provider": "openai"}, p)
+
+        data = json.loads(p.read_text())
+        assert data["messages"] == msgs
+        assert data["session_state"] == {"provider": "openai"}

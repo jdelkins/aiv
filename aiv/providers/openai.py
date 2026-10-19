@@ -1,9 +1,13 @@
 from __future__ import annotations
-from typing import cast, Iterable
+
+from collections.abc import Iterable, Mapping
+from typing import cast
 
 import openai
 from openai.types.chat import ChatCompletionMessageParam
+
 from aiv.conversation import GenericMessageParam
+from aiv.providers import validate_provider_options
 
 
 class OpenAIProvider:
@@ -14,26 +18,16 @@ class OpenAIProvider:
         max_tokens: int,
         sys_prompt: str,
         api_key: str,
+        options: Mapping[str, object] | None = None,
     ) -> tuple[str, str | None]:
-        """
-        Call the OpenAI Chat Completions API with the given messages and return
-        (response_text, stop_reason), normalized to match AnthropicProvider's
-        contract — i.e. "max_tokens" rather than OpenAI's native "length" — so
-        aiv.api.run_turn can check for truncation uniformly across providers.
+        """Stream a Chat Completions response and normalize its stop reason.
 
-        Caveats:
-        - Uses the Chat Completions API (client.chat.completions.create), not the
-          newer Responses API; sys_prompt is injected as a leading {"role": "system"}
-          message since Chat Completions has no separate top-level system param.
-        - Newer reasoning-tuned models (o1/o3/gpt-5-thinking-style) may reject the
-          "system" role in favor of "developer", and may reject `max_tokens` in favor
-          of `max_completion_tokens`. Not handled here; use the openai-reasoning
-          provider for such models instead.
-        - No prompt-caching parameter is passed or needed — OpenAI caches eligible
-          prompt prefixes (>=1024 tokens) automatically server-side.
-        - Unlike AnthropicProvider, stream chunks may have `delta.content is None`
-          (e.g. on role-only or finish chunks), hence the explicit None check below.
+        No provider-specific options are currently supported. Models requiring
+        a developer message or max_completion_tokens should use the
+        openai-reasoning implementation instead.
         """
+        validate_provider_options(options, provider_type="openai")
+
         client = openai.OpenAI(api_key=api_key)
         full_messages = cast(
             Iterable[ChatCompletionMessageParam],
@@ -47,14 +41,17 @@ class OpenAIProvider:
             stream=True,
         )
 
-        response_text = ""
+        response_parts: list[str] = []
         finish_reason: str | None = None
         for chunk in stream:
+            # Usage-only chunks may contain no choices.
+            if not chunk.choices:
+                continue
             choice = chunk.choices[0]
             if choice.delta.content is not None:
-                response_text += choice.delta.content
+                response_parts.append(choice.delta.content)
             if choice.finish_reason is not None:
                 finish_reason = choice.finish_reason
 
         stop_reason = "max_tokens" if finish_reason == "length" else finish_reason
-        return response_text, stop_reason
+        return "".join(response_parts), stop_reason

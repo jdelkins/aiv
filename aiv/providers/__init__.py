@@ -1,5 +1,8 @@
 from __future__ import annotations
+
+from collections.abc import Collection, Mapping
 from typing import Protocol
+
 from aiv.conversation import GenericMessageParam
 
 
@@ -11,40 +14,56 @@ class Provider(Protocol):
         max_tokens: int,
         sys_prompt: str,
         api_key: str,
+        options: Mapping[str, object] | None = None,
     ) -> tuple[str, str | None]:
-        """Call the provider's API and return (response_text, normalized_stop_reason).
+        """Return (response_text, normalized_stop_reason).
 
-        normalized_stop_reason should be the literal string "max_tokens" when the
-        response was truncated due to the token limit, regardless of what the
-        underlying SDK calls it (e.g. OpenAI's "length"), so that aiv.api.run_turn
-        can check for it uniformly. Otherwise, the raw provider-native reason may be
-        returned as-is since nothing else currently inspects it.
+        Normalize token-limit truncation to "max_tokens"; other stop reasons
+        may retain their provider-native values.
+
+        Validate options before creating a client or making an API request.
+        None and an empty mapping both preserve the API's default behavior.
         """
         ...
 
 
-# Caveat: needs `from aiv.conversation import GenericMessageParam` added to the
-# imports at the top of this file. Also, per the earlier note, the concrete
-# implementations (AnthropicProvider.call, OpenAIProvider.call,
-# OpenAIReasoningProvider.call) should update their `messages: list[dict]`
-# parameter annotations to `list[GenericMessageParam]` too, to stay consistent
-# with the Protocol they're structurally implementing — not strictly required at
-# runtime since Protocol satisfaction here is duck-typed, but worth doing for
-# type-checker agreement across the whole boundary.
-def get_provider(name: str) -> Provider:
-    # Imports are deferred into each branch so that selecting one provider never
-    # requires another provider's SDK to be installed (all are optional
-    # dependencies from the package's point of view).
-    if name == "anthropic":
+def validate_provider_options(
+    options: object,
+    *,
+    provider_type: str,
+    supported_options: Collection[str] = (),
+) -> None:
+    """Reject unsupported option names; adapters validate supported values."""
+    if options is None:
+        return
+    if not isinstance(options, Mapping):
+        raise ValueError(
+            f"aiv: options for provider type {provider_type!r} must be a mapping"
+        )
+
+    unknown = [name for name in options if name not in supported_options]
+    if unknown:
+        names = ", ".join(sorted(repr(name) for name in unknown))
+        supported = ", ".join(sorted(supported_options)) or "(none)"
+        raise ValueError(
+            f"aiv: unsupported options for provider type {provider_type!r}: "
+            f"{names}; supported options: {supported}"
+        )
+
+
+def get_provider(provider_type: str) -> Provider:
+    """Instantiate an implementation by type, not by configured profile name."""
+    # Deferred imports keep SDK dependencies isolated to the selected type.
+    if provider_type == "anthropic":
         from aiv.providers.anthropic import AnthropicProvider
 
         return AnthropicProvider()
-    if name == "openai":
+    if provider_type == "openai":
         from aiv.providers.openai import OpenAIProvider
 
         return OpenAIProvider()
-    if name == "openai-reasoning":
+    if provider_type == "openai-reasoning":
         from aiv.providers.openai_reasoning import OpenAIReasoningProvider
 
         return OpenAIReasoningProvider()
-    raise ValueError(f"aiv: unknown provider {name!r}")
+    raise ValueError(f"aiv: unknown provider type {provider_type!r}")

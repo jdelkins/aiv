@@ -1,9 +1,22 @@
+# Save as aiv/providers/openai_reasoning.py (underscore), matching the factory import.
 from __future__ import annotations
-from typing import cast, Iterable
+
+from collections.abc import Iterable, Mapping
+from typing import Literal, TypedDict, cast
 
 import openai
 from openai.types.chat import ChatCompletionMessageParam
+
 from aiv.conversation import GenericMessageParam
+from aiv.providers import validate_provider_options
+
+
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+VALID_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
+
+
+class ReasoningOptions(TypedDict, total=False):
+    reasoning_effort: ReasoningEffort
 
 
 class OpenAIReasoningProvider:
@@ -14,23 +27,30 @@ class OpenAIReasoningProvider:
         max_tokens: int,
         sys_prompt: str,
         api_key: str,
+        options: Mapping[str, object] | None = None,
     ) -> tuple[str, str | None]:
-        """
-        Call the OpenAI Chat Completions API for reasoning-tier models (o1/o3/
-        gpt-5-thinking-style). Non-streaming by design — select this provider
-        explicitly in config for such models rather than relying on name-sniffing,
-        since streaming support and parameter names have shifted across releases
-        within this model family and aiv has no streaming-dependent UX to lose.
+        """Return a blocking Chat Completions response and normalized stop reason.
 
-        Differences from OpenAIProvider:
-        - sys_prompt is injected under the "developer" role rather than "system".
-        - token limit is passed as max_completion_tokens rather than max_tokens.
-        - no stream=True; response is read back as a single completed message.
-
-        Caveat: if a future reasoning model reintroduces "system" role support or
-        reverts to max_tokens, this module may need a per-model branch at that point;
-        not anticipated here since the user opts into this provider explicitly.
+        Uses a developer message and max_completion_tokens for reasoning models.
+        Supported effort values depend on the model; the API validates model
+        compatibility. Unspecified effort is omitted to preserve API defaults.
         """
+        validate_provider_options(
+            options,
+            provider_type="openai-reasoning",
+            supported_options=("reasoning_effort",),
+        )
+
+        request_options: ReasoningOptions = {}
+        if options is not None and "reasoning_effort" in options:
+            effort = options["reasoning_effort"]
+            if not isinstance(effort, str) or effort not in VALID_REASONING_EFFORTS:
+                raise ValueError(
+                    "aiv: reasoning_effort for provider type 'openai-reasoning' "
+                    f"must be one of {VALID_REASONING_EFFORTS}; got {effort!r}"
+                )
+            request_options["reasoning_effort"] = cast(ReasoningEffort, effort)
+
         client = openai.OpenAI(api_key=api_key)
         full_messages = cast(
             Iterable[ChatCompletionMessageParam],
@@ -41,6 +61,7 @@ class OpenAIReasoningProvider:
             model=model,
             max_completion_tokens=max_tokens,
             messages=full_messages,
+            **request_options,
         )
 
         choice = response.choices[0]

@@ -1,14 +1,18 @@
 from __future__ import annotations
-import os
 
+import os
+from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+
 from aiv.config import (
     get_config,
     DEFAULT_PROMPT_MARKER,
     DEFAULT_MODE_CHAT_SUFFIX,
     DEFAULT_MODE_CODE_SUFFIX,
+    VALID_PROVIDER_TYPES,
 )
 
 
@@ -190,26 +194,41 @@ class PipelineContext:
         max_tokens: int = 4096,
         interactive: bool = False,
         piped_stdin: bool = False,
+        provider_type: str | None = None,
+        provider_options: Mapping[str, object] | None = None,
     ):
+        # Infer types only for legacy built-in names. Custom profiles must be
+        # resolved by the caller, not by reading configuration here.
+        if provider_type is None:
+            if provider not in VALID_PROVIDER_TYPES:
+                raise ValueError(
+                    f"aiv: provider {provider!r} requires a resolved provider_type"
+                )
+            provider_type = provider
+        if provider_type not in VALID_PROVIDER_TYPES:
+            raise ValueError(
+                f"aiv: invalid provider type {provider_type!r}; "
+                f"must be one of {VALID_PROVIDER_TYPES}"
+            )
+
         self.model = model
+        # Profile identity is persisted; implementation type and options are
+        # derived from configuration and never stored in session_state.
         self.provider = provider
+        self.provider_type = provider_type
+        self.provider_options: dict[str, object] = (
+            deepcopy(dict(provider_options)) if provider_options is not None else {}
+        )
         self.sys_prompt = sys_prompt
-        # Real, independently-settable fields now (previously read live from
-        # get_config() inside the mode_suffix property on every access). This
-        # is what lets !suffix edit CHAT/CODE mode's suffix in place without
-        # forcing CUSTOM mode, and what session_state diffing compares against
-        # config defaults. Callers (cli.py) are expected to source the initial
-        # values from get_config(), same as sys_prompt already does.
+        # Callers initialize these from config; commands can edit each suffix
+        # independently without forcing CUSTOM mode.
         self.mode_chat_suffix = mode_chat_suffix
         self.mode_code_suffix = mode_code_suffix
         self.stdin_data = stdin_data
         self.api_key = api_key
-        # Path to the api_key_file currently in effect, if any — None means the
-        # resolved provider's config default (or inline api_key) is in use, not
-        # an explicit !api-key-file/--api-key-file override. Distinct from
-        # api_key itself: this is what gets diffed against config defaults and
-        # persisted to session_state, since the raw key material is never
-        # written to the conversation file.
+        # Effective key-file path, including a configured default if applicable.
+        # None means no file-backed credential is active. Only a path differing
+        # from the profile default is persisted; key material is never persisted.
         self.api_key_file = api_key_file
         self.max_tokens = max_tokens
         self.interactive = interactive
@@ -249,15 +268,10 @@ class PipelineContext:
 
     @property
     def mode_suffix(self) -> str:
-        """
-        Resolves the suffix to append for the current mode. CUSTOM mode (set
-        via the mode_suffix setter below) takes priority and is intentionally
-        never persisted anywhere — it's a purely in-memory, per-session
-        override (e.g. REPL's `!mode default` + `!suffix ...` workflow). CHAT
-        and CODE modes read their own independently-settable fields, which ARE
-        eligible for session_state persistence (see commands.py's
-        _sync_session_state) since !suffix edits them in place without
-        forcing CUSTOM when a mode is already active.
+        """Resolve the suffix for the active mode.
+
+        CUSTOM overrides are ephemeral. CHAT and CODE suffixes are independent
+        fields whose edits are eligible for session-state persistence.
         """
         if self._mode_suffix is not None:
             return self._mode_suffix
@@ -282,6 +296,7 @@ class PipelineContext:
         self._conv_path = None
 
     def print_summary(self, console):
+        from rich.markup import escape
         from rich.table import Table
 
         table = Table(show_header=False, box=None, padding=(0, 1))
@@ -289,22 +304,30 @@ class PipelineContext:
         table.add_column("value", style="white")
 
         rows = [
-            ("provider", self.provider),
-            ("model", self.model),
-            ("mode", self.mode.value),
+            ("provider", escape(self.provider)),
+            ("provider_type", escape(self.provider_type)),
+            ("provider_options", escape(repr(self.provider_options))),
+            ("model", escape(self.model)),
+            ("mode", escape(self.mode.value)),
             (
                 "mode_suffix",
-                repr(self.mode_suffix) if self.mode_suffix else "[dim]<empty>[/dim]",
+                escape(repr(self.mode_suffix))
+                if self.mode_suffix
+                else "[dim]<empty>[/dim]",
             ),
-            ("mode_chat_suffix", repr(self.mode_chat_suffix)),
-            ("mode_code_suffix", repr(self.mode_code_suffix)),
+            ("mode_chat_suffix", escape(repr(self.mode_chat_suffix))),
+            ("mode_code_suffix", escape(repr(self.mode_code_suffix))),
             (
                 "sys_prompt",
-                repr(self.sys_prompt) if self.sys_prompt else "[dim]<empty>[/dim]",
+                escape(repr(self.sys_prompt))
+                if self.sys_prompt
+                else "[dim]<empty>[/dim]",
             ),
             (
                 "stdin_data",
-                repr(self.stdin_data) if self.stdin_data else "[dim]<empty>[/dim]",
+                escape(repr(self.stdin_data))
+                if self.stdin_data
+                else "[dim]<empty>[/dim]",
             ),
             ("max_tokens", str(self.max_tokens)),
             ("interactive", str(self.interactive)),
@@ -312,11 +335,13 @@ class PipelineContext:
             ("api_key", "***" if self.api_key else "[dim]<empty>[/dim]"),
             (
                 "api_key_file",
-                str(self.api_key_file) if self.api_key_file else "[dim]<default>[/dim]",
+                escape(str(self.api_key_file))
+                if self.api_key_file
+                else "[dim]<default>[/dim]",
             ),
-            ("working_directory", str(self.working_directory)),
-            ("conv_path", str(self.conv_path)),
-            ("prompt_marker", repr(self.prompt_marker)),
+            ("working_directory", escape(self.working_directory)),
+            ("conv_path", escape(str(self.conv_path))),
+            ("prompt_marker", escape(repr(self.prompt_marker))),
         ]
 
         for field, value in rows:
@@ -330,20 +355,3 @@ class PipelineContext:
         data = self.stdin_data
         self.stdin_data = None
         return data
-
-
-# Caveat: mode_suffix's property getter no longer calls get_config() at all, and
-# can no longer raise FileNotFoundError — print_summary's prior try/except around
-# mode_suffix access has been removed accordingly. cli.py MUST now pass
-# mode_chat_suffix/mode_code_suffix explicitly when constructing PipelineContext
-# (sourced from get_config(), same as sys_prompt already is) rather than relying
-# on the old lazy-config-read behavior; if cli.py isn't updated, every ctx will
-# silently fall back to this module's import-time DEFAULT_MODE_CHAT_SUFFIX/
-# DEFAULT_MODE_CODE_SUFFIX constructor defaults instead of the user's configured
-# values. This is addressed in the cli.py pass later in this sequence.
-#
-# Caveat: no new SetModeChatSuffixCommand/SetModeCodeSuffixCommand dataclasses
-# were added, per the decision to keep a single !suffix command — commands.py's
-# cmd_set_prompt_suffix is expected to branch on ctx.mode and write directly to
-# ctx.mode_chat_suffix/ctx.mode_code_suffix when mode is CHAT/CODE, or fall
-# through to the mode_suffix setter (unchanged CUSTOM-forcing path) otherwise.

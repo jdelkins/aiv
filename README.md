@@ -7,741 +7,782 @@ location detection.
 
 ## Features
 
-- **Editor-optimized design** for seamless integration with Helix and other editors
+- **Editor-optimized design** for Helix and other editors
 - **Terminal-friendly interface** for command-line workflows and automation
-- **Interactive REPL** (`aiv -i`) for conversational sessions with history management
+- **Interactive REPL** (`aiv -i`) with input history and tab completion
 - **Per-project conversation state** scoped to the current git repository
-- **Pipe-friendly interface** that works with any Unix tool
-- **Flexible input handling** supporting files, globs, and stdin
-- **Multi-provider support**: Anthropic, OpenAI, and OpenAI reasoning-tier models
-  (o1/o3/gpt-5-thinking-style), selectable per invocation or per REPL session
-- **Per-provider configuration**: each provider can have its own model, API key,
-  and max token budget, configured once and pulled in automatically on switch
-- **Session state persistence**: provider, model, max token budget, API key file,
-  system prompt, and mode-specific suffix customizations persist across
-  invocations by being stored alongside the conversation history, not just in
-  global config
-- **Real-time streaming responses** via the Anthropic and OpenAI Python SDKs
-  (OpenAI reasoning-tier models use a non-streaming blocking call; see Mechanism)
-- **Token-efficient context storage** - when only `-c` option is used without
-  a prompt and normal stdin, context is saved to conversation file without making
-  API requests
-- **Per-request output mode control** via `-C` (conversational) and `-X` (code-only) flags
-- **Inline history inspection** via `-H`/`--history`, without needing to enter the REPL
-- **Inline content inspection** via `-S`/`--show`, to view full interaction content without entering the REPL
-- **Safe destructive operations**: `--reset` skips its confirmation prompt only
-  when invoked non-interactively with piped stdin; typed at a terminal or inside
-  the REPL, it always asks first
-- **Nix flake**: install with `nix profile install` or run directly with `nix run`
-  without any manual setup
-- **Home-manager module**: declarative configuration, including per-provider
-  settings, and editor keybindings for Helix, Vim, and Neovim
-
+- **Pipe-friendly interface** supporting files, globs, and stdin
+- **Named provider profiles** with arbitrary names, selectable with
+  `-P`/`--provider` or `!provider`
+- **Three provider implementations**: `anthropic`, `openai`, and
+  `openai-reasoning`
+- **Per-profile configuration** for implementation type, model, credentials,
+  token budget, and implementation-specific request options
+- **Reasoning effort control** through `options.reasoning_effort` on
+  `openai-reasoning` profiles
+- **Session-state persistence** for the selected profile, model, token budget,
+  API key file, system prompt, and chat/code suffix customizations
+- **Streaming responses** for Anthropic and standard OpenAI profiles;
+  reasoning-tier OpenAI profiles use a blocking request
+- **Context-only operations** that store input without making API requests
+- **Per-request output modes** via `-C` (conversational) and `-X` (code-only)
+- **History and content inspection** via `-H`/`--history` and `-S`/`--show`
+- **Confirmation for destructive operations**, except non-interactive resets
+  with piped stdin
+- **Nix flake** for installation and direct execution
+- **Home-manager module** with declarative profiles and editor keybindings
 
 ## Installation
 
 ### With Nix (recommended)
 
-```bash
-nix run github:jdelkins/aiv
-```
+Run directly:
+
+    nix run github:jdelkins/aiv
 
 Or install into your profile:
 
-```bash
-nix profile install github:jdelkins/aiv
-```
+    nix profile install github:jdelkins/aiv
 
 ### Manual
 
 1. Clone the repository:
-   ```bash
-   git clone https://github.com/jdelkins/aiv.git
-   ```
+
+       git clone https://github.com/jdelkins/aiv.git
+       cd aiv
 
 2. Install dependencies:
-   ```bash
-   pip install anthropic openai prompt-toolkit rich
-   ```
-   Only the SDK(s) for the provider(s) you actually configure are imported at
-   runtime, so it's fine to omit `openai` if you only ever use Anthropic, or
-   vice versa — but both are listed above for simplicity.
+
+       pip install anthropic openai prompt-toolkit rich
+
+   Only the SDK for the selected implementation is imported at runtime. You
+   can omit `openai` if you only use Anthropic, or vice versa.
 
 3. Install the package:
-   ```bash
-   pip install -e .
-   ```
+
+       pip install -e .
 
 ## Configuration
 
-### With the home-manager module
+### Provider names and implementation types
 
-If you are using the provided home-manager module, configuration is handled
-declaratively via `programs.aiv`. Two shapes are supported, and can be mixed:
+A **provider name** identifies a configured profile, such as `claude`, `fast`,
+or `deep`. Its **type** selects the implementation used to call the API:
 
-- A flat, top-level `apiKey`/`apiKeyFile`/`model`/`maxTokens` configuration,
-  suitable for a single-provider setup (or as a fallback for providers that
-  don't have their own entry — see below).
-- A `providers` attribute set, keyed by provider name, for configuring
-  multiple providers declaratively so you can switch between them at runtime
-  with `-P`/`--provider` or `!provider`.
+| Type | API behavior |
+|---|---|
+| `anthropic` | Anthropic Messages API with streaming |
+| `openai` | OpenAI Chat Completions with streaming |
+| `openai-reasoning` | OpenAI Chat Completions using a developer message, `max_completion_tokens`, and a blocking request |
 
-```nix
-{ aiv, config, ... }:
+Multiple profiles can use the same type with different models, credentials,
+token budgets, or options.
 
-{
-  imports = [ aiv.homeManagerModules.default ];
-
-  programs.aiv = {
-    enable = true;
-
-    # Optional: the default active provider. Must be one of:
-    # "anthropic", "openai", "openai-reasoning". If unset, the tool's own
-    # built-in default (anthropic) applies.
-    provider = "anthropic";
-
-    # Per-provider configuration. Each attribute name must be a valid
-    # provider; home-manager will raise an assertion otherwise. A provider
-    # with no entry here (or with some fields left unset) falls back to the
-    # top-level apiKey/apiKeyFile/model/maxTokens options below.
-    providers = {
-      anthropic = {
-        apiKeyFile = config.sops.secrets.anthropic-api-key.path;
-        model = "claude-sonnet-4-6";
-        maxTokens = 4096;
-      };
-      openai = {
-        apiKeyFile = config.sops.secrets.openai-api-key.path;
-        model = "gpt-4o-mini";
-        maxTokens = 8192;
-      };
-      openai-reasoning = {
-        # Can point at the same key file as "openai" if it's the same account.
-        apiKeyFile = config.sops.secrets.openai-api-key.path;
-        model = "o3-mini";
-        maxTokens = 16384;
-      };
-    };
-
-    # Top-level fallback settings. Optional if every provider above sets its
-    # own apiKey/apiKeyFile and model — only needed to backstop a provider
-    # with a partial entry, or if you're using aiv with a single provider and
-    # skip the `providers` attribute set entirely.
-    # apiKey writes the key directly into the Nix store — only suitable for
-    # non-sensitive testing or if you accept that trade-off.
-    # apiKey = "sk-ant-...";
-    apiKeyFile = config.sops.secrets.anthropic-api-key.path;
-    model = "claude-sonnet-4-6";
-    maxTokens = 4096;
-
-    # optional, not recommended (see below)
-    systemPrompt = "...";
-    codePromptSuffix = "...";
-    chatPromptSuffix = "...";
-  };
-}
-```
-
-Within each `providers.<name>` entry, and at the top level, `apiKey` and
-`apiKeyFile` remain mutually exclusive (asserted separately for each). Unlike
-earlier versions of this module, setting one is no longer *required* at the
-top level — it's only needed as a fallback if a given provider's entry
-doesn't fully specify its own key.
-
-The module writes `~/.config/aiv/config.toml` for you — using the `providers`
-table shape described under Manual Configuration below when `providers` is
-non-empty — and manages editor keybindings for Helix, Vim, and Neovim.
+For example, `aiv -P deep` selects the profile named `deep`; its
+`type = "openai-reasoning"` selects the implementation.
 
 ### Manual configuration
 
-1. Create a configuration directory and file:
-   ```bash
-   mkdir -p ~/.config/aiv
-   ```
+Create the configuration directory:
 
-2. Configure your API settings in `~/.config/aiv/config.toml`:
-   ```toml
-   # Option 1: inline key (simpler, but the key is stored in plaintext on disk)
-   api_key = "your_anthropic_api_key"
+    mkdir -p ~/.config/aiv
 
-   # Option 2: read the key from a file at runtime (preferred for security)
-   # api_key_file = "~/.secrets/anthropic-api-key"
+Configure `~/.config/aiv/config.toml`:
 
-   model = "claude-sonnet-4-6"
-   max_tokens = 4096
-   ```
+    provider = "claude"
 
-   Use `api_key_file` to keep the key out of the config file itself — useful
-   when the config file is version-controlled or shared, or when a secrets
-   manager such as sops or pass delivers the key as a file.
+    [providers.claude]
+    type = "anthropic"
+    api_key_file = "~/.secrets/anthropic-api-key"
+    model = "claude-sonnet-4-6"
+    max_tokens = 4096
 
-   This flat shape configures a single provider (defaulting to `anthropic`).
-   To configure multiple providers so you can switch between them at runtime,
-   use the `providers` table instead (see below) — the flat fields above
-   remain supported as a fallback for whichever provider has no entry in that
-   table, so existing single-provider configs keep working unchanged.
+    [providers.fast]
+    type = "openai"
+    api_key_file = "~/.secrets/openai-api-key"
+    model = "gpt-4o-mini"
+    max_tokens = 8192
 
-3. (Optional; not recommended) Configure `sys_prompt`, `mode_chat_suffix`, and
-   `mode_code_suffix`. Defaults are tested to work well with this type of
-   workflow, but they are configurable if further tweaking is desired.
+    [providers.deep]
+    type = "openai-reasoning"
+    api_key_file = "~/.secrets/openai-api-key"
+    model = "o3-mini"
+    max_tokens = 16384
 
-   - `sys_prompt` is used to set a baseline for the entire conversation. The
-      default establishes a baseline personality and output style for the
-      AI: terse, pipe-friendly, and format-aware. By default the model avoids
-      unsolicited explanation and preserves input formatting, making it safe to
-      use in shell pipelines. `aiv` passes this prompt unchanged to the API on
-      every request.
+    [providers.deep.options]
+    reasoning_effort = "high"
 
-   - `mode_chat_suffix` is used by the `-C` flag to layer per-request
-      formatting instructions directly onto the user prompt. It nudges the model
-      toward markdown and readable formatting for conversational use.
+Select profiles with:
 
-   - `mode_code_suffix` is used similarly by the `-X` flag to emit raw code
-      only with caveats as comments.
+    aiv -P fast "Summarize the tradeoffs between REST and gRPC"
+    aiv -P deep "Investigate this concurrency bug"
 
-   Both suffixes can be edited in place at runtime (and the edit persisted;
-   see "Session State" below) via `!suffix`/`--prompt-suffix` while in chat or
-   code mode, respectively — see the REPL commands table and Mechanism section.
+The selection persists for subsequent invocations in the same conversation.
 
-### Multi-provider configuration
+Profile names are case-sensitive, non-empty strings. Quote TOML keys containing
+spaces or punctuation that would otherwise be interpreted as TOML syntax, and
+quote such names when passing them through a shell.
 
-To configure more than one provider so you can switch between them with
-`-P`/`--provider` or `!provider`, add a `providers` table to `config.toml`:
+#### Common profile fields
 
-```toml
-# The default provider used when no session_state override is present and no
-# -P/--provider flag is given. Must be one of: anthropic, openai, openai-reasoning
-provider = "anthropic"
+Each `[providers.<name>]` table supports:
 
-[providers.anthropic]
-api_key_file = "~/.secrets/anthropic-api-key"
-model = "claude-sonnet-4-6"
-max_tokens = 4096
+| Field | Meaning |
+|---|---|
+| `type` | Implementation: `anthropic`, `openai`, or `openai-reasoning` |
+| `api_key` | Inline API key |
+| `api_key_file` | File containing the API key; expanded and read at runtime |
+| `model` | Default model |
+| `max_tokens` | Maximum output token budget |
+| `options` | Table of implementation-specific request settings |
 
-[providers.openai]
-api_key_file = "~/.secrets/openai-api-key"
-model = "gpt-4o-mini"
-max_tokens = 8192
+Prefer `api_key_file` to keep key material out of the configuration file itself.
+File contents are stripped of surrounding whitespace.
 
-[providers.openai-reasoning]
-# Can point at the same key file as "openai" if it's the same account/org.
-api_key_file = "~/.secrets/openai-api-key"
-model = "o3-mini"
-max_tokens = 16384
-```
+In manual configuration, an inline `api_key` takes precedence if both credential
+fields are present. Configure only one to avoid ambiguity; the home-manager
+module enforces mutual exclusion.
 
-Each `[providers.<name>]` table accepts the same `api_key`/`api_key_file` and
-`model`/`max_tokens` fields as the flat top-level config, scoped to that
-provider only. A provider with no table entry falls back to the flat
-top-level fields, so you only need to add a `[providers.*]` section for
-providers you actually want distinct settings for.
+#### Fallback rules
 
-`sys_prompt`, `mode_chat_suffix`, and `mode_code_suffix` remain global
-settings, not provider-scoped — they apply the same way regardless of which
-provider is active.
+Top-level `api_key`/`api_key_file`, `model`, and `max_tokens` remain supported:
+
+- A profile with neither credential field inherits the top-level credential
+  source. Credentials inherit as a pair, never as independent fields.
+- Missing `model` and `max_tokens` inherit independently from their top-level
+  values.
+- Without a configured token budget, `max_tokens` defaults to `4096`.
+- There is no implicit model or credential fallback from the previously active
+  profile. Requests fail if no model or API key is resolved.
+- `options` are profile-local and never inherit from a top-level table.
+
+Read-only and context-only operations do not require an API key or model.
+However, configuration and configured key files are still loaded and validated;
+missing or unreadable configured key files remain errors.
+
+#### Legacy configuration compatibility
+
+Existing flat configurations continue working:
+
+    api_key_file = "~/.secrets/anthropic-api-key"
+    model = "claude-sonnet-4-6"
+    max_tokens = 4096
+
+The default provider name is `anthropic`.
+
+Profiles named `anthropic`, `openai`, or `openai-reasoning` can omit `type`;
+it is inferred from the name for compatibility:
+
+    [providers.openai]
+    api_key_file = "~/.secrets/openai-api-key"
+    model = "gpt-4o-mini"
+
+These built-in names also remain selectable without a corresponding table,
+using the flat fallback settings. Custom names require a configured entry
+with an explicit `type`. Unknown names fail rather than silently falling back.
+
+An explicit `type` always takes precedence over a legacy built-in profile name.
+
+### Implementation-specific options
+
+Options are validated by the selected adapter before creating an SDK client or
+making a request. Unknown option names are rejected rather than forwarded
+blindly to the SDK.
+
+Currently:
+
+- `anthropic` accepts no implementation-specific options.
+- `openai` accepts no implementation-specific options.
+- `openai-reasoning` supports `reasoning_effort`.
+
+Example:
+
+    [providers.deep.options]
+    reasoning_effort = "high"
+
+The reasoning adapter recognizes `none`, `minimal`, `low`, `medium`, `high`,
+and `xhigh`. **Availability and accepted values depend on the selected model
+and the installed SDK.** Recognition by AIV does not imply every model accepts
+every value; model-specific compatibility is checked by the API.
+
+Unspecified options are omitted from requests so API defaults apply.
+
+Options are configuration-only: there is currently no CLI or REPL command to
+override them. To switch effort levels conveniently, define separate profiles:
+
+    provider = "reasoning-low"
+    api_key_file = "~/.secrets/openai-api-key"
+    model = "o3-mini"
+
+    [providers.reasoning-low]
+    type = "openai-reasoning"
+    max_tokens = 8192
+    options.reasoning_effort = "low"
+
+    [providers.reasoning-high]
+    type = "openai-reasoning"
+    max_tokens = 16384
+    options.reasoning_effort = "high"
+
+Then:
+
+    aiv -P reasoning-low "Outline an approach"
+    aiv -P reasoning-high "Check the correctness of this algorithm"
+
+Configuration is cached within a running process. Restart a long-running REPL
+after editing `config.toml`; external session-state reload is not a general
+configuration-file reload.
+
+### Global prompts
+
+`sys_prompt`, `mode_chat_suffix`, `mode_code_suffix`, and `prompt_marker` are
+top-level settings, shared by all profiles. Put them before any TOML table
+headers.
+
+Defaults are designed for editor and pipeline workflows; customization is
+optional and generally unnecessary.
+
+- `sys_prompt` establishes the baseline personality and output style. AIV passes
+  it unchanged as the system instruction for every request.
+- `mode_chat_suffix` adds conversational formatting instructions to user prompts
+  in chat mode.
+- `mode_code_suffix` requests raw code without markdown fences in code mode.
+- `prompt_marker` identifies inline instructions for extraction; the default
+  is `## prompt:`.
+
+While chat or code mode is active, `!suffix` edits that mode's suffix and persists
+the change. In default/custom mode, it sets an ephemeral suffix instead.
+
+### With the home-manager module
+
+    { aiv, config, ... }:
+
+    {
+      imports = [ aiv.homeManagerModules.default ];
+
+      programs.aiv = {
+        enable = true;
+        provider = "claude";
+
+        providers = {
+          claude = {
+            type = "anthropic";
+            apiKeyFile = config.sops.secrets.anthropic-api-key.path;
+            model = "claude-sonnet-4-6";
+            maxTokens = 4096;
+          };
+
+          fast = {
+            type = "openai";
+            apiKeyFile = config.sops.secrets.openai-api-key.path;
+            model = "gpt-4o-mini";
+            maxTokens = 8192;
+          };
+
+          deep = {
+            type = "openai-reasoning";
+            apiKeyFile = config.sops.secrets.openai-api-key.path;
+            model = "o3-mini";
+            maxTokens = 16384;
+            options.reasoning_effort = "high";
+          };
+        };
+
+        # Optional flat fallback settings:
+        # apiKeyFile = config.sops.secrets.anthropic-api-key.path;
+        # model = "claude-sonnet-4-6";
+        # maxTokens = 4096;
+
+        # Omit the module's legacy Claude model fallback when every profile
+        # should supply its own model:
+        model = null;
+
+        # Optional global customizations:
+        # systemPrompt = "...";
+        # codePromptSuffix = "...";
+        # chatPromptSuffix = "...";
+        # promptMarker = "## prompt:";
+      };
+    }
+
+The module:
+
+- Writes `~/.config/aiv/config.toml`.
+- Accepts arbitrary non-empty profile names.
+- Requires an explicit type for custom names, while inferring legacy built-in
+  names.
+- Checks that the default profile is configured or is a legacy built-in name.
+- Enforces mutual exclusion of `apiKey` and `apiKeyFile`, separately at the top
+  level and within every profile.
+- Supports TOML-compatible profile `options`, with adapter-specific validation
+  performed by AIV at runtime.
+- Manages editor keybindings for Helix, Vim, and Neovim.
+- Adds conversation, lock, and REPL history files to Git ignores.
+
+The module's top-level model defaults to `claude-sonnet-4-6` for compatibility.
+Set `model = null` to omit that fallback. The top-level token budget defaults to
+`4096`.
+
+Inline `apiKey` values are written into the Nix store. Prefer `apiKeyFile`
+with sops-nix, agenix, or another file-based secrets manager. Profile options
+also go into the Nix store and must not contain secrets.
 
 ## The `aiv` command
 
-```
-aiv [options] [prompt]
-```
+    aiv [options] [prompt]
 
-Each invocation of `aiv` builds an ordered pipeline of operations from its
-arguments — adding context, sending a prompt, showing history, entering the
-REPL — and executes them in sequence. This means flags can be freely combined
-in a single invocation; e.g. `aiv -c foo.py -H "explain this file"` adds
-context, sends the prompt, and prints history, all in one command.
+Each invocation builds an ordered pipeline of operations. Flags compose freely:
+for example, `aiv -c foo.py -H "explain this file"` adds context, sends the
+prompt, and then prints history.
 
-#### Options
+### Options
 
-- `-c [pattern|-]`: Add context from files (filename or quoted glob pattern) or stdin (-)
-- `-R, --reset`: Reset conversation thread. Prompts for confirmation unless
-  invoked non-interactively with piped stdin (e.g. `echo | aiv -R`), in which
-  case it resets immediately.
-- `-C`: Conversational mode — appends formatting instructions to the user prompt
-  that encourage markdown output with triple backticks where appropriate
-- `-X`: Code-only mode — appends formatting instructions to the user prompt that
-  suppress markdown and triple backtick fences; caveats are emitted as code comments.
-  Recommended when piping output back into an editor or shell pipeline.
-- `-i, --repl`: Launch the interactive REPL after processing any other options
-  given on the command line (context, prompt, history, etc. all run first, in order,
-  then the REPL takes over the terminal for further turns). If no other flags or prompt
-  are provided on the command line, `-i` is assumed.
-- `-H, --history [range]`: Show conversation history and exit. Combine with `-i`
-  to view history and then remain in the REPL. Accepts an optional range, e.g.
-  `-H 3-7`.
-- `-S, --show [range]`: Show full content of one or more interactions and exit.
-  Accepts an optional range, e.g. `-S 3-7`; defaults to the entire conversation
-  if no range is given. Combine with `-i` to remain in the REPL afterward. You
-  may also show only the *user* or *assistant* side of the turn, and specify
-  raw mode if desired, like so: `-S "7 assistant -r"`. Here, raw mode means:
-  don't pretty-print the output, even if the text looks like markdown.
-- `-m MODEL`: Use specified model
-- `-P, --provider {anthropic|openai|openai-reasoning}`: Set the API provider
-  for this and subsequent invocations. Switching providers pulls that
-  provider's configured default model, API key, and max token budget
-  automatically (see Configuration and Mechanism) — you generally don't need
-  to also pass `-m`/`--max-tokens` unless overriding the provider's default.
-- `--api-key-file FILE`: Read the API key from `FILE` and use it for the
-  session, overriding whatever key is configured for the active provider. The
-  key material itself is never written to disk by this flag; only the file
-  path is persisted (see Session State below), and it is re-read from disk on
-  each subsequent invocation.
-- `--max-tokens N`: Set the max output token budget. Like `-m`, this is
-  provider-scoped: switching providers resets to that provider's own
-  configured `max_tokens` unless overridden again.
-- `-s [prompt]`: Override system prompt
-- `-h, -v`: Display help/version information
+- `-c, --context PATTERN`: Add context from a file or quoted glob pattern.
+  Use `-` or `stdin` for piped input. Optional metadata:
+  `stdin,file=PATH,range=START:END`.
+- `-e, --extract PATTERN`: Extract inline prompt-marker lines, add the remaining
+  content as context, and output the response. Accepts the same stdin metadata
+  syntax as `--context`. Without markers, passes input through unchanged and
+  stores it as context.
+- `-R, --reset`: Reset conversation history. Confirms unless invoked
+  non-interactively with piped stdin. Session settings survive.
+- `-C, --chat`: Conversational mode, encouraging markdown where appropriate.
+- `-X, --code`: Code-only mode, suppressing markdown fences and putting caveats
+  in code comments. Recommended for editor replacement and pipelines.
+- `-i, --repl`: Enter the REPL after other operations. With no flags or prompt,
+  REPL mode is assumed.
+- `-H, --history [range]`: Show history, optionally restricted to a range such
+  as `3-7`.
+- `-S, --show [args]`: Show full interaction content. Defaults to the entire
+  conversation. Supports a range, role filter, and raw rendering, for example
+  `-S "7 assistant -r"`.
+- `-P, --provider NAME`: Select a named profile and load its implementation,
+  options, model, credentials, and token budget. The selection persists.
+- `-m, --model MODEL`: Override the active profile's model.
+- `--max-tokens N`: Override the active profile's output token budget.
+- `--api-key-file FILE`: Read a session credential override from a file.
+  Only its path is persisted, never its contents.
+- `-s, --sys-prompt PROMPT`: Override the system prompt.
+- `--prompt-suffix TEXT`: Edit the current chat/code suffix, or set an ephemeral
+  override in default/custom mode.
+- `--prompt-marker TEXT`: Set the prompt extraction marker for the process.
+- `-d, --working-directory DIR`: Change working directory before pipeline
+  operations.
+- `-h, --help`: Show help.
+- `-v, --version`: Show version.
 
-Note: `-C` and `-X` are mutually exclusive. When `-i` is used without either,
-`-C` is implied.
+`-C` and `-X` are mutually exclusive. When entering the REPL in default mode,
+chat mode is selected automatically.
 
-### Interactive REPL (`aiv -i`)
+History and show operations can be combined with `-i` to continue interactively.
 
-`aiv -i` drops into an interactive session for conversational use. It renders
-responses with rich markdown display and shares the same conversation
-file as any other `aiv` invocation, so context and history built up via pipes
-or one-shot commands is immediately available once you enter the REPL, and
-vice versa.
+## Interactive REPL
 
-Prompts are submitted with **Alt-Enter** (or Escape then Enter), allowing Enter
-to be used freely for multiline input.
+    aiv -i
 
-If stdin is piped when `-i` is used (e.g. `cat file | aiv -i`), that input is
-consumed before entering the loop, and the REPL reattaches to the controlling
-terminal (`/dev/tty`) for interactive input afterward.
+The REPL renders markdown responses and shares conversation state with one-shot
+and pipeline invocations.
 
-If another `aiv` invocation (one-shot or a different REPL session) changes the
-active provider, model, or other session-state settings while this REPL is
-idle at the prompt, the change is detected and picked up automatically — see
-Session State below.
+Submit input with **Alt-Enter**, or Escape followed by Enter. Ordinary Enter
+inserts a newline for multiline input. Tab completes command names, profile
+names, and paths for applicable commands.
 
-#### REPL commands
+If stdin is piped, it is consumed before entering the loop. The REPL then
+reattaches to `/dev/tty` for interactive input.
+
+### REPL commands
 
 | Command | Description |
 |---|---|
-| `!history [range]` | Show conversation history (e.g. `!history 3-7`) |
-| `!show <range> [role] [--raw\|-r]` | Show full content of one or more interactions (e.g. `!show 3-7`) |
-| `!provider [name]` | Show or set the API provider (`anthropic`, `openai`, `openai-reasoning`); pulls that provider's configured model, key, and max_tokens automatically |
-| `!api-key-file <file>` | Read the API key from a file and use it for the session, overriding the active provider's configured key |
+| `!history [range]` | Show conversation history |
+| `!show <range> [role] [--raw\|-r]` | Show full interaction content |
+| `!provider [name]` | Show or select a profile; selection reloads its defaults |
+| `!api-key-file <file>` | Set a file-backed credential override |
 | `!model [model]` | Show or set the model |
-| `!max-tokens [n]` | Show or set the max output token budget |
+| `!max-tokens [n]` | Show or set the token budget |
 | `!sys-prompt [prompt]` | Show or set the system prompt |
-| `!chat` | Enter *chat* mode. This is the default mode in the repl. |
-| `!code` | Enter *code* mode. Equivalent to `aiv -X -i` |
-| `!mode [mode]` | Show or set the mode. use `default` or any value except `chat` or `code` to avoid adding any suffix to the user prompt. |
-| `!suffix [text]` | While in chat or code mode, edits that mode's suffix in place (persisted; see Session State). While in default/custom mode, sets a one-off ephemeral suffix override instead (not persisted) — e.g. `!mode default` then `!suffix reply in Portuguese only` |
+| `!chat` | Enter chat mode |
+| `!code` | Enter code mode |
+| `!mode [chat\|code\|default]` | Show or set interaction mode |
+| `!suffix [text]` | Edit the active chat/code suffix, or set an ephemeral custom suffix |
+| `!prompt-marker [text]` | Show or set the extraction marker |
 | `!delete <range>` | Delete interactions with preview and confirmation |
-| `!reset` | Wipe the entire conversation with confirmation |
-| `!context <path>` | Add a file to context (equivalent to `aiv -c <path>`) |
-| `!params` | Show current runtime parameters (provider, model, mode, suffixes, etc.) |
-| `!help` | Show available commands |
-| `!version` | Show version information |
+| `!reset` | Reset history with confirmation |
+| `!context <path>` | Add file context |
+| `!extract <path>` | Extract inline instructions and process file content |
+| `!cd [directory]` | Show or change working directory |
+| `!params` | Show runtime settings, including profile name, type, and options |
+| `!help` | Show commands |
+| `!version` | Show version |
 | `!quit` / `!exit` | End the session |
 
 ## Examples
 
-### Basic Queries
-```bash
-# Simple question
-aiv "What is the difference between TCP and UDP?"
+### Basic queries
 
-# Get help with shell commands
-aiv "How do I find files modified in the last 24 hours?"
+    aiv "What is the difference between TCP and UDP?"
+    aiv "How do I find files modified in the last 24 hours?"
+    aiv -C "Walk me through the tradeoffs of different caching strategies"
+    aiv -i
 
-# Code explanation
-aiv "Explain what this regex does: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'"
+### Working with files
 
-# Conversational mode with markdown formatting
-aiv -C "Walk me through the tradeoffs of different caching strategies"
+    # Analyze a file
+    aiv -c main.py "What does this script do?"
 
-# Interactive REPL session
-aiv -i
-```
+    # Review a quoted glob
+    aiv -c "src/*.js" "Find potential security issues"
 
-### Working with Files
-```bash
-# Analyze a single file
-aiv -c main.py "What does this script do?"
+    # Compare implementations
+    aiv -c old_version.py -c new_version.py "What changed?"
 
-# Review multiple files
-aiv -c "src/*.js" "Find potential security issues in these files"
+    # Load context, ask a question, then enter the REPL
+    aiv -i -c main.py "Walk me through this file"
 
-# Compare implementations
-aiv -c old_version.py -c new_version.py "What are the key differences?"
+### History and content inspection
 
-# Load context and launch REPL in one step
-aiv -i -c main.py "Walk me through this file"
-```
+    aiv -H
+    aiv --history 3-7
+    aiv -S
+    aiv -S "3-7 assistant -r"
+    aiv -c foo.py -H -i "How does this file fit into the project?"
 
-### History and Content Inspection
-```bash
-# Show full history and exit
-aiv -H
+### Profile workflows
 
-# Show a specific range and exit
-aiv --history 3-7
+These examples use the `claude`, `fast`, and `deep` profiles configured above.
 
-# Show full content of interactions 3 through 7
-aiv -S 3-7
+    # Switch to a fast OpenAI profile
+    aiv -P fast "Summarize the tradeoffs between REST and gRPC"
 
-# Show full content of the entire conversation
-aiv -S
+    # Subsequent invocations retain the profile selection
+    aiv "What about GraphQL?"
 
-# Add context, ask a question, review history, then continue in the REPL
-aiv -c foo.py -H -i "How does this file fit into the project?"
-```
+    # Switch to a reasoning profile with configured effort
+    aiv -P deep "Design a consistent-hashing scheme"
 
-### Multi-provider Workflows
-```bash
-# Switch to OpenAI for this and subsequent invocations, in one step
-aiv -P openai "Summarize the tradeoffs between REST and gRPC"
+    # Explicit overrides run after profile selection, regardless of flag order
+    aiv --api-key-file ~/.secrets/work-openai-key -P deep "Review this design"
 
-# The switch persists — a later invocation with no -P continues using OpenAI
-aiv "What about GraphQL?"
+    # Start a REPL with a selected profile
+    aiv -P claude -i
 
-# Switch back to Anthropic; pulls its configured default model/key/max_tokens
-aiv -P anthropic "Continue the discussion"
+### Pipeline integration
 
-# Use a reasoning-tier OpenAI model for a harder problem, non-streaming
-aiv -P openai-reasoning "Design a consistent-hashing scheme for a distributed cache"
+    # Analyze a finite snapshot of logs
+    tail -n 200 /var/log/nginx/error.log | aiv "Summarize these errors"
 
-# Override the active provider's key for one invocation (path persists, not the key)
-aiv --api-key-file ~/.secrets/work-openai-key -P openai "..."
+    # Explain command output
+    ps aux | head -20 | aiv "Explain what these processes are doing"
 
-# Start a REPL already on a specific provider
-aiv -P openai -i
-```
+    # Review a diff
+    git diff HEAD~1 | aiv "Review this commit for potential issues"
 
-### Pipeline Integration
-```bash
-# Analyze log files
-tail -f /var/log/nginx/error.log | aiv "Summarize these errors"
+    # Analyze disk usage
+    df -h | aiv "Analyze disk usage and suggest optimizations"
 
-# Process command output
-ps aux | head -20 | aiv "Explain what these processes are doing"
+    # Reset without confirmation in automation
+    echo | aiv -R
 
-# Git integration
-git diff HEAD~1 | aiv "Review this commit for potential issues"
+AIV reads piped stdin to completion before processing it. An unbounded input
+such as `tail -f` must end before a request can be made.
 
-# System analysis
-df -h | aiv "Analyze disk usage and suggest optimizations"
+### Conversation workflows
 
-# Reset without confirmation in a script (piped stdin skips the prompt)
-echo | aiv -R
-```
+    aiv -C "I need to design a caching system for a web API"
+    aiv -C "What about Redis versus in-memory caching?"
+    aiv -C -c current_api.py "How would this integrate?"
 
-### Conversation Workflows
-```bash
-# Start a technical discussion
-aiv -C "I need to design a caching system for a web API"
+    # A direct terminal invocation confirms before resetting
+    aiv -R "Completely unrelated question"
 
-# Continue the conversation (state is preserved automatically)
-aiv -C "What about using Redis vs in-memory caching?"
+### Multiple context sources
 
-# Add specific context
-aiv -C -c current_api.py "How would this integrate with my existing API?"
+    cat main.rs | grep -A 20 'fn hoge()' | aiv -c main.rs "Explain this function"
 
-# Start a fresh topic (prompts for confirmation, since this is a direct terminal invocation)
-aiv -R "Completely unrelated question"
-```
+    cat error.log | aiv -c "src/*.py" -c config.yaml "Why am I getting these errors?"
 
-### Multi-context Analysis
-```bash
-# Analyze function within file context
-cat main.rs | grep -A 20 'fn hoge()' | aiv -c main.rs "Explain this function"
+    # Store context without making a request
+    cat hoge.rs | aiv -c - -c "src/*.rs"
+    aiv "Explain this context"
 
-# Combine different data sources
-cat error.log | aiv -c "src/*.py" -c config.yaml "Why am I getting these errors?"
+### Debugging session
 
-# Add context and generate
-cat hoge.rs | aiv -c - -c "src/*.rs"
-aiv "explain this context"
-```
-
-### Debugging Session
-```bash
-# Start debugging session
-echo "This function isn't working as expected" | aiv -c buggy_code.py -c -
-
-# Add test output
-python test.py 2>&1 | aiv -c -
-
-# Continue troubleshooting
-aiv -C "This is the test output. What specific changes should I make?"
-```
+    echo "This function isn't working as expected" | aiv -c buggy_code.py -c -
+    python test.py 2>&1 | aiv -c -
+    aiv -C "What specific changes should I make?"
 
 ## Editor Integration (Helix)
 
-AIV is optimized for Helix editor workflows. When piping text into and out of the
-tool, use the `-X` flag to ensure responses are in code-ready format — no markdown
-fences, no prose wrapping, just the raw output suitable for insertion into your
-buffer.
+Use `-X` when piping responses into a buffer so output is raw code rather than
+markdown-wrapped prose.
 
-The key bindings below use `Space+v` as the prefix. Add them to your
-`~/.config/helix/config.toml` (this is also what the home-manager module
-generates automatically if you manage Helix through it — see
-`programs.helix.settings.keys` in `module.nix`):
+The following bindings use `Space+v` as a prefix. Add them to
+`~/.config/helix/config.toml`; the home-manager module generates equivalent
+bindings using the installed package path.
 
-```toml
-[keys.normal.space.v]
-r = ":pipe aiv -X -e 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"  # rewrite selection via inline ## prompt: comments
-c = ":pipe-to aiv -X -c 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"  # load selection as context, no output
-C = ":pipe-to aiv -X -R -c 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"  # load selection as context, resetting conversation
-R = ":run-shell-command echo '' | aiv -X -R"  # reset conversation
-f = ":run-shell-command aiv -X -c '%{buffer_name}'"  # load entire current buffer as context
+    [keys.normal.space.v]
+    r = ":pipe aiv -X -e 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"
+    c = ":pipe-to aiv -X -c 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"
+    C = ":pipe-to aiv -X -R -c 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"
+    R = ":run-shell-command echo '' | aiv -X -R"
+    f = ":run-shell-command aiv -X -c '%{buffer_name}'"
 
-[keys.select.space.v]
-r = ":pipe aiv -X -e 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"
-c = ":pipe-to aiv -X -c 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"
-C = ":pipe-to aiv -X -R -c 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"
-R = ":run-shell-command echo '' | aiv -X -R"
-f = ":run-shell-command aiv -X -c '%{buffer_name}'"
+    [keys.select.space.v]
+    r = ":pipe aiv -X -e 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"
+    c = ":pipe-to aiv -X -c 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"
+    C = ":pipe-to aiv -X -R -c 'stdin,file=%{buffer_name},range=%{selection_line_start}:%{selection_line_end}'"
+    R = ":run-shell-command echo '' | aiv -X -R"
+    f = ":run-shell-command aiv -X -c '%{buffer_name}'"
 
-[keys.insert]
-A-p = [":insert-output printf '## prompt: '", "move_char_right"]  # insert prompt prefix for use with the rewrite binding
-```
-
-The `-e`/`--extract` option (used by the `r` binding above) reads
-`## prompt: <text>` comment lines from the piped input, strips them from the
-content, and sends the remaining code as context with the extracted text as the
-prompt. This option accepts the same `stdin,file=PATH,range=L:L` metadata syntax
-as `-c`/`--context` (see the Options list above) and also works directly against
-a file path instead of stdin, e.g. `aiv -X -e some_file.py`. The range, if provided,
-is adjusted to be accurate as if the `## prompt:` lines were not in the file, since
-they are considered ephemeral tooling interactions and not a permanent part of the
-code file.
+    [keys.insert]
+    A-p = [":insert-output printf '## prompt: '", "move_char_right"]
 
 ### Key binding summary
 
 | Binding | Mode | Action |
 |---|---|---|
-| `Space+v+r` | normal / select | Rewrite selection using inline `## prompt:` comments (`-e`/`--extract`) |
-| `Space+v+c` | normal / select | Load selection as context (no output) |
-| `Space+v+C` | normal / select | Load selection as context, reset conversation first |
-| `Space+v+R` | normal / select | Reset conversation |
-| `Space+v+f` | normal / select | Load entire current buffer as context |
-| `Alt+p` | insert | Insert `## prompt: ` prefix at cursor |
+| `Space+v+r` | normal / select | Rewrite selection using inline prompt comments |
+| `Space+v+c` | normal / select | Store selection as context |
+| `Space+v+C` | normal / select | Reset history, then store selection as context |
+| `Space+v+R` | normal / select | Reset conversation history |
+| `Space+v+f` | normal / select | Load the current buffer's file from disk |
+| `Alt+p` | insert | Insert the prompt marker |
 
-### 1. Add Selected Text to Context (`Alt+|`)
-Select code in Helix and use pipe-ignore to add context without output:
-```bash
-aiv -c -
-```
+The file binding reads the saved file, not unsaved buffer contents.
 
-### 2. Generate Code After Selection (`|`)
-After adding context, generate new content that gets inserted after your selection:
-```bash
-aiv -X "generate unit tests for this function"
-```
+### Inline prompt extraction
 
-### 3. Replace Selection with AI Response (`|`)
-Replace selected text with AI-generated content:
-```bash
-aiv -X "refactor this code for better performance"
-```
+Annotate selected code with lines such as:
 
-### 4. Rewrite In Place via Inline Prompt Comments (`|`)
-Annotate code directly with `## prompt: <instruction>` comment lines, then
-pipe the selection through `-e`/`--extract` to rewrite it in place — the
-comment lines are stripped and used as the prompt, the remaining code is sent
-as context, and the AI's response replaces the selection:
-```bash
-aiv -X -e -
-```
+    ## prompt: Refactor this function without changing its behavior.
 
-### 5. Shell Command Integration (`!`)
-Use shell commands to generate content at cursor position:
-```bash
-aiv [-c "./*"] "create a README for this project"
-```
+Then pipe the selection through:
+
+    aiv -X -e -
+
+The extraction command removes marker lines, combines their text into the
+prompt, stores the remaining content as context, and outputs the AI response.
+Without marker lines, it passes the input through unchanged and stores it as
+context.
+
+Metadata can identify the source location:
+
+    aiv -X -e 'stdin,file=src/example.py,range=10:30'
+
+The range end is reduced by the number of extracted prompt lines, treating
+those comments as ephemeral tooling instructions rather than permanent code.
+
+Extraction also works against a file:
+
+    aiv -X -e some_file.py
+
+### Other editor operations
+
+Store a selection without generating output:
+
+    aiv -c -
+
+Replace a selection with a response:
+
+    aiv -X "Refactor this code for better performance"
+
+Generate content from previously stored context:
+
+    aiv -X "Generate unit tests for this function"
+
+Use a shell-output insertion command to generate a new document:
+
+    aiv -X -c "./*" "Create a README for this project"
 
 ## Mechanism
 
-### Command Pipeline
+### Command pipeline
 
-Internally, every invocation of `aiv` is translated into an ordered list of
-commands (add context, send prompt, show history, show content, reset, enter
-REPL, etc.) which are executed in sequence against a shared session context.
-This is the same execution path whether you're running a single one-shot
-command or interacting inside the REPL — REPL commands (`!history`, `!show`,
-`!context`, etc.) are the exact same operations as their command-line
-equivalents (`-H`, `-S`, `-c`, etc.), just invoked interactively. There is no
-subprocess indirection between the two modes.
+CLI flags and REPL commands use the same in-process command implementations.
+There is no subprocess indirection between one-shot and interactive operations.
 
-Command precedence governs execution order within a single invocation
-regardless of the order flags were typed: destructive resets run first,
-then provider selection (since switching providers pulls that provider's
-configured defaults), then other session configuration (model, max-tokens,
-api-key-file, mode, sys-prompt), then prompt-suffix edits (which depend on
-mode already being resolved), then context loading, then the prompt itself,
-then read-only display commands, with REPL handoff always last.
+Precedence determines execution order rather than the order flags were typed:
 
-### Provider Abstraction
+1. Working directory changes.
+2. Destructive history resets.
+3. Provider profile selection.
+4. Other session settings: model, token budget, credential file, mode, system
+   prompt, and extraction marker.
+5. Prompt-suffix edits.
+6. Context loading and extraction.
+7. The positional prompt.
+8. Read-only display commands.
+9. REPL handoff.
 
-`aiv` supports three providers, selected via `-P`/`--provider` or `!provider`:
-`anthropic`, `openai`, and `openai-reasoning`. Each is implemented as a small,
-self-contained module responsible for translating `aiv`'s provider-agnostic
-conversation format into that provider's SDK calls and normalizing its
-response back — differences in system-prompt placement (top-level `system`
-parameter vs. a `system`/`developer` role message), truncation signaling
-(`stop_reason` vs. `finish_reason`), streaming support, and token-limit
-parameter naming (`max_tokens` vs. `max_completion_tokens`) are all contained
-within the relevant provider module and never leak into the rest of the
-pipeline.
+Extraction can make a request during its own context/extraction operation.
 
-`openai-reasoning` targets o1/o3/gpt-5-thinking-style models specifically and
-deliberately does not stream — reasoning-tier models have had inconsistent
-streaming support across releases, and `aiv`'s UX has no dependency on
-incremental output, so a plain blocking call is simpler and more robust than
-guessing at a given model's current capabilities.
+Profile selection precedes explicit model, key, and budget overrides because it
+loads the profile's defaults.
 
-Anthropic's prompt caching (automatic caching against the stable prefix of
-system prompt + accumulated context + earlier turns) is used as-is; OpenAI's
-equivalent prefix caching requires no explicit code at all, since it is
-applied automatically server-side for eligible prompts.
+### Provider abstraction
 
-### Output Mode Flags (-C and -X)
+Configuration resolution separates profile identity from API implementation:
 
-Rather than modifying the system prompt, `-C` and `-X` append a formatting
-instruction to the user prompt for that specific request. This means:
+- The profile name identifies configuration and is persisted in session state.
+- Its type selects an adapter.
+- Its options are interpreted and validated by that adapter.
 
-- The system prompt is never altered, avoiding conflicts with your configured `SYS_PROMPT`
-- The instruction is scoped to a single turn — subsequent messages are unaffected
-  unless the flag is passed again
-- The conversation JSON reflects exactly what was sent, making behaviour easy to inspect
+Adapters translate the provider-agnostic message format into SDK requests and
+normalize responses. Differences in system/developer message placement,
+streaming, token-limit arguments, and truncation signaling stay inside the
+adapters.
 
-Use `-C` for interactive, readable responses during exploration or discussion.
-Use `-X` whenever output will be piped into an editor, written to a file, or
-consumed by another tool.
+Anthropic and standard OpenAI responses stream. The `openai-reasoning`
+implementation deliberately uses blocking Chat Completions requests rather than
+guessing at individual models' streaming support.
 
-When using `-i` (REPL mode), the chosen mode flag applies to every turn in the
-session. If neither `-C` nor `-X` is given, `-C` is the default for REPL sessions.
+Anthropic requests retain the configured automatic prompt-caching behavior.
+OpenAI prefix caching is applied server-side for eligible requests without an
+explicit caching option.
 
-### Session State
+### Output modes
 
-In addition to the message history, the conversation file stores a
-`session_state` object recording any of the following settings that have been
-explicitly changed away from their `config.toml` defaults:
+`-C` and `-X` append formatting instructions to the user prompt rather than
+modifying the system prompt. Stored messages therefore reflect the prompt
+actually sent to the API.
 
-- `provider`, `model`, `max_tokens`, `api_key_file` (provider-scoped — diffed
-  against the active provider's own configured defaults)
-- `sys_prompt`, `mode_chat_suffix`, `mode_code_suffix` (global — diffed
-  against the corresponding flat `config.toml` values)
+Use `-C` for readable conversation and `-X` for editor replacement, file output,
+and pipelines. In the REPL, the active mode applies to subsequent turns until
+changed. One-shot invocations do not persist mode selection.
 
-`session_state` is always a pure diff recomputed from scratch on every
-relevant change, not an incrementally accumulated log — switching providers
-away and back, for instance, cleanly drops any model override that was set
-while a different provider was active rather than remembering it. A setting
-that matches its default again is removed from `session_state` entirely
-rather than persisted as a redundant entry.
+### Session state
 
-This means a one-shot `aiv -P openai -m gpt-4.1 "..."` both uses that provider
-and model for the current call *and* persists the switch, so the very next
-`aiv` invocation — one-shot or `-i` — picks it back up automatically, with no
-distinction in behavior between CLI flags and REPL commands.
+The conversation file stores messages alongside a `session_state` object
+containing explicit overrides relative to configuration defaults:
 
-The one setting intentionally **never** persisted is an ad-hoc `!suffix`
-override made while in `default`/`custom` mode (e.g. `!mode default` followed
-by `!suffix reply in Portuguese only`) — this is treated as a purely
-in-memory, per-session override, gone once the process exits. Editing a
-mode's suffix while that mode (`chat` or `code`) is already active, by
-contrast, edits `mode_chat_suffix`/`mode_code_suffix` in place and *is*
-persisted, since it represents a durable preference rather than a one-off
-aside.
+- `provider`: selected profile name, relative to the configured default name.
+- `model`, `max_tokens`, `api_key_file`: relative to the active profile's resolved
+  defaults.
+- `sys_prompt`, `mode_chat_suffix`, `mode_code_suffix`: relative to global
+  defaults.
 
-For security, `--api-key-file`/`!api-key-file` persists only the file *path*
-to `session_state`, never the resolved key material itself; the file is
-re-read from disk on every subsequent invocation. If a persisted path points
-at a file that no longer exists by the time it's re-read — e.g. a key file
-rotated or removed out from under a long-running REPL session — `aiv` fails
-loudly rather than silently falling back to a different key, since there is no
-safe assumption to make about which key the user actually intended at that
-point.
+Implementation type and provider options are never persisted. They are derived
+from the selected profile on startup and session-state reload.
 
-If another `aiv` invocation changes `session_state` while a REPL session is
-idle, the running REPL detects the change (it already polls the conversation
-file's mtime to display externally-added turns) and re-resolves its runtime
-settings from the updated `session_state` before continuing.
+Session state is recomputed as a pure diff after relevant changes. Settings
+matching their defaults are removed rather than redundantly stored.
 
-### Context-Only Mode
+Selecting a profile reloads all of its defaults—even when selecting the same
+profile again or switching between profiles sharing an implementation type.
+Prior model, credential-file, and token-budget overrides are discarded. Missing
+model or credential values clear the previous profile's values rather than
+reusing them.
 
-When using only the `-c` option without providing a prompt and normal stdin:
-- No API request is sent to save tokens
-- Context is stored in the conversation file for future use
-- No output is generated
-- Useful for building up context before asking questions
+For example:
 
-### Confirmation Behaviour for Destructive Operations
+    aiv -P deep -m custom-model "Analyze this"
 
-`--reset` (and the REPL's `!delete`) ask for confirmation before wiping or
-removing conversation state, except in one case: a non-interactive `aiv -R`
-invocation with piped stdin skips the prompt, since that pattern implies a
-scripted or automated context where no one is present to answer a y/n prompt.
-Any other invocation — typed directly at a terminal, or issued from inside the
-REPL — always confirms first. `--reset` only clears message history;
-`session_state` (provider/model/etc. overrides) is orthogonal and survives a
-reset.
+persists both the profile selection and model override. A later invocation
+restores them. Selecting another profile loads that profile's defaults instead.
 
-### Per-Project Conversation State
+Only key-file paths are persisted, never resolved key material. A persisted
+override file is re-read on subsequent invocations and session reload. If it
+disappears or becomes unreadable, AIV fails rather than silently selecting
+another credential source.
 
-AIV scopes conversation history to the current git repository:
-- Inside a git repo, state is stored in `.aiv-conversation.json` at the repo root
-- Outside any git repo, state falls back to `~/.config/aiv/conversation.json`
-- Conversation is preserved across invocations by default
-- Use `-R` or `--reset` to start a fresh conversation
+Ad-hoc suffix overrides made in default/custom mode are intentionally ephemeral.
+Chat/code suffix edits are durable and included in session-state diffs. Mode
+selection and runtime prompt-marker edits are not persisted.
 
-Every `aiv` invocation reads and writes the same conversation file, so you can
-freely switch between pipeline use and interactive use within the same session.
+### External changes during a REPL session
 
-It is recommended to add `.aiv-conversation.json` to your global gitignore:
-```bash
-echo ".aiv-conversation.json" >> ~/.gitignore_global
-```
+The REPL watches the conversation file while idle. When another invocation
+changes it, the REPL reloads session settings and displays newly added
+interactions. A settings-only change does not reprint old turns.
 
-### File Management
+If the selected profile or credential source cannot be resolved, the REPL reports
+the error and exits rather than continuing with stale settings.
 
-- **Conversation history + session state (in repo)**: `.aiv-conversation.json` at repo root
-- **Conversation history + session state (fallback)**: `~/.config/aiv/conversation.json`
-- **REPL input history**: `.aiv-history` at repo root (or `~/.config/aiv/.aiv-history`)
-- **Configuration**: `~/.config/aiv/config.toml`
+This reload uses the process's cached configuration; restart the REPL to pick up
+edits to `config.toml`.
+
+### Context-only operations
+
+Use `-c` without a prompt to store files or explicit stdin context without an
+API request:
+
+    aiv -c main.py
+    python test.py 2>&1 | aiv -c -
+
+No response is generated. Stored context is available to later prompts and REPL
+sessions.
+
+Without an explicit stdin context argument, piped input becomes the prompt when
+no positional prompt is supplied; otherwise it becomes implicit context.
+
+### Destructive operations
+
+`--reset` and REPL deletion ask for confirmation, except non-interactive resets
+with piped stdin:
+
+    echo | aiv -R
+
+Direct terminal resets and REPL resets always use confirmation behavior.
+Reset clears message history only; session settings survive.
+
+### Per-project conversation state
+
+Inside a Git repository, AIV stores state at the repository root:
+
+- `.aiv-conversation.json`: messages and session state
+- `.aiv-conversation.lock`: conversation lock
+- `.aiv-history`: REPL input history
+
+Outside Git, state falls back to `~/.config/aiv/`:
+
+- `conversation.json`
+- `.aiv-history`
+
+Every invocation uses the applicable conversation file, allowing pipeline and
+interactive workflows to share history.
+
+Add repository-local state files to your global Git ignore file:
+
+    printf '%s\n' \
+      '.aiv-conversation.json' \
+      '.aiv-conversation.lock' \
+      '.aiv-history' >> ~/.gitignore_global
+
+Configure Git to use that file if it is not already your global excludes file.
+The home-manager module manages these ignore entries automatically.
+
+## Development and Tests
+
+Run the Python test suite with:
+
+    pytest -q
+
+Provider and API unit tests mock SDK clients or the provider factory. They do
+not require API keys or network access. SDK-specific adapter tests are skipped
+when their optional SDK dependency is not installed.
 
 ## Attribution
 
 This project was forked from https://github.com/o8vm/aiv, a shell script by
 Hayato Ohhashi, but has been completely rewritten in Python with a substantially
-different architecture and feature set. The core concept — Unix pipe-friendly AI
-interaction — is theirs; everything else has been rebuilt from scratch.
+different architecture and feature set. The core concept—Unix pipe-friendly AI
+interaction—is theirs; everything else has been rebuilt from scratch.
 
 Major differences from the original:
 
-- **Language**: Rewritten in Python; no longer a POSIX shell script.
-- **No curl dependency**: Uses the official Anthropic and OpenAI Python SDKs,
-  with streaming support where applicable.
-- **Multi-provider support**: Anthropic, OpenAI, and OpenAI reasoning-tier
-  models are all supported, selectable per invocation or per REPL session,
-  with per-provider configuration and automatic session-state persistence of
-  the active choice.
-- **Conversation format**: Stored as JSON. Existing conversation files from the
-  shell version are not compatible.
-- **Conversation preserved by default**: The shell version required `-e` to
-  continue a thread. The Python version preserves state automatically; use
-  `-R`/`--reset` to start fresh.
-- **Per-project state**: Conversation is scoped to the git repo root rather than
-  a single global file.
-- **Interactive REPL**: A full interactive session mode (`aiv -i`) with history,
-  tab completion, and rich markdown rendering.
-- **Command pipeline architecture**: Every invocation — including REPL commands
-  — is translated into an ordered pipeline of operations executed against a shared
-  session context. Flags compose freely in a single invocation.
-- **Output mode flags**: `-C` (conversational/markdown) and `-X` (code-only) append
-  per-request formatting instructions to the user prompt rather than modifying the
-  system prompt, keeping turns independently inspectable.
-- **Glob expansion**: Handled internally and consistently when patterns are
-  quoted, rather than relying on shell expansion before the script sees them.
-- **Nix package and home-manager module**: First-class Nix support including a
-  flake, a home-manager module (with declarative per-provider configuration),
-  and bundled editor helper scripts.
+- **Python implementation** using official SDKs rather than curl.
+- **Named provider profiles** with separate implementation types, credentials,
+  model defaults, token budgets, and validated request options.
+- **JSON conversation storage** with per-project history and session settings.
+  Conversation files from the original shell version are not compatible.
+- **Conversation preservation by default**; use `-R` to reset history.
+- **Interactive REPL** with multiline input, history, completion, and markdown
+  rendering.
+- **Shared command pipeline** for CLI and REPL operations.
+- **Per-turn output instructions** for conversational and code-only workflows.
+- **Internal glob expansion** for consistently handled quoted patterns.
+- **First-class Nix support** through a flake and home-manager module with editor
+  integration.
 
 ## License
 

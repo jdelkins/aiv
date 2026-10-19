@@ -3,12 +3,12 @@ from aiv.config import (
     get_version,
     get_config,
     get_provider_settings,
-    VALID_PROVIDERS,
     DEFAULT_PROVIDER,
     DEFAULT_SYS_PROMPT,
     DEFAULT_MODE_CHAT_SUFFIX,
     DEFAULT_MODE_CODE_SUFFIX,
 )
+from copy import deepcopy
 import glob
 import re
 import sys
@@ -98,7 +98,7 @@ MARKDOWN_STRONG = [
     r"^\s*[\-\*\+]\s+\[[ xX]\]\s+\S+",
 ]
 
-# Three or more weak pattern matches required → treat as markdown
+# Two or more weak pattern matches required across distinct lines
 MARKDOWN_WEAK = [
     # inline code
     r"`[^`]+`",
@@ -159,7 +159,6 @@ def looks_like_markdown(text: str) -> bool:
     if _looks_like_code(text):
         return False
 
-    # Weak positive signals: require 3 or more hits across distinct lines
     weak_hits = 0
     for line in lines:
         for pattern in MARKDOWN_WEAK:
@@ -279,24 +278,17 @@ def _apply_leading_ws(body: str, response: str) -> str:
 
 
 def _normalise_path(p: str | Path | None) -> str | None:
-    return str(Path(p).expanduser()) if p else None
+    return str(Path(p).expanduser().absolute()) if p else None
 
 
 def _sync_session_state(ctx: PipelineContext) -> None:
-    """
-    Recompute session_state as a pure diff of ctx's mutable settings against
-    config defaults, and persist it. Called after any command that changes one
-    of these fields. Never incremental — always recomputed from scratch, so
-    switching away from and back to a provider cleanly drops any prior
-    provider-scoped override rather than remembering it.
+    """Recompute and persist a pure diff against configuration defaults.
 
-    Provider-scoped fields (diffed against get_provider_settings(ctx.provider)):
-      provider, model, api_key_file, max_tokens
-    Global fields (diffed against flat config values, independent of provider):
-      sys_prompt, mode_chat_suffix, mode_code_suffix
+    Profile-scoped fields: provider name, model, api_key_file, max_tokens.
+    Global fields: sys_prompt, mode_chat_suffix, mode_code_suffix.
 
-    mode/mode_suffix (CUSTOM) are intentionally never included — purely
-    in-memory/per-session, per design discussion.
+    Implementation type and options are always derived from configuration.
+    Mode and CUSTOM suffix overrides remain purely in-memory.
     """
     config = get_config()
     default_provider = config.get("provider", DEFAULT_PROVIDER)
@@ -306,7 +298,7 @@ def _sync_session_state(ctx: PipelineContext) -> None:
 
     if ctx.provider != default_provider:
         state["provider"] = ctx.provider
-    if ctx.model != settings["model"]:
+    if ctx.model != (settings["model"] or ""):
         state["model"] = ctx.model
     if ctx.max_tokens != settings["max_tokens"]:
         state["max_tokens"] = ctx.max_tokens
@@ -327,55 +319,56 @@ def _sync_session_state(ctx: PipelineContext) -> None:
 
 
 def apply_session_state(ctx: PipelineContext) -> None:
-    """
-    Re-derive ctx's mutable settings from the conversation file's session_state
-    (if any), layered over config defaults. Called once at startup and again
-    whenever the REPL detects an external change to the conversation file, so
-    a switch made by another aiv invocation is picked up without an explicit
-    command here.
+    """Resolve configuration plus persisted overrides before updating context.
 
-    Raises FileNotFoundError if session_state references an api_key_file that
-    no longer exists — deliberately NOT caught here. A session_state entry can
-    only ever be written after cmd_set_api_key_file has already validated the
-    file exists, so this can only fire on a genuine external race (the file
-    was removed after being set); per design discussion, that case should be
-    fatal rather than silently falling back to a different key.
+    Called at startup and when the REPL detects external conversation changes.
+    Type and options come from the selected profile, never session_state.
+
+    Missing or unreadable persisted key files fail loudly rather than falling
+    back to a different credential source.
     """
     config = get_config()
     state = load_session_state(ctx.conv_path)
 
     provider = state.get("provider", config.get("provider", DEFAULT_PROVIDER))
     settings = get_provider_settings(provider)
-    model = state.get("model", settings["model"])
-    max_tokens = state.get("max_tokens", settings["max_tokens"])
+    provider_type = settings["type"]
+    provider_options = deepcopy(settings["options"])
+    model = state.get("model", settings["model"]) or ""
+    max_tokens = int(state.get("max_tokens", settings["max_tokens"]))
 
     state_key_file = state.get("api_key_file")
     if state_key_file:
-        key_path = Path(state_key_file).expanduser()
+        key_path = Path(state_key_file).expanduser().absolute()
         if not key_path.exists():
             raise FileNotFoundError(f"aiv: api_key_file not found: {key_path}")
         api_key = key_path.read_text().strip()
     else:
         key_path = (
-            Path(settings["api_key_file"]).expanduser()
+            Path(settings["api_key_file"]).expanduser().absolute()
             if settings["api_key_file"]
             else None
         )
-        api_key = settings["api_key"]
+        api_key = settings["api_key"] or ""
 
-    ctx.provider = provider
-    ctx.model = model
-    ctx.max_tokens = int(max_tokens)
-    ctx.api_key_file = key_path
-    ctx.api_key = api_key or ""
-
-    ctx.sys_prompt = state.get("sys_prompt", config.get("sys_prompt", DEFAULT_SYS_PROMPT))
-    ctx.mode_chat_suffix = state.get(
+    sys_prompt = state.get("sys_prompt", config.get("sys_prompt", DEFAULT_SYS_PROMPT))
+    mode_chat_suffix = state.get(
         "mode_chat_suffix", config.get("mode_chat_suffix", DEFAULT_MODE_CHAT_SUFFIX)
     )
-    ctx.mode_code_suffix = state.get(
+    mode_code_suffix = state.get(
         "mode_code_suffix", config.get("mode_code_suffix", DEFAULT_MODE_CODE_SUFFIX)
     )
+
+    ctx.provider = provider
+    ctx.provider_type = provider_type
+    ctx.provider_options = provider_options
+    ctx.model = model
+    ctx.max_tokens = max_tokens
+    ctx.api_key_file = key_path
+    ctx.api_key = api_key
+    ctx.sys_prompt = sys_prompt
+    ctx.mode_chat_suffix = mode_chat_suffix
+    ctx.mode_code_suffix = mode_code_suffix
 
 
 # ---------------------------------------------------------------------------
@@ -676,10 +669,11 @@ def cmd_extract_prompt_context(cmd: ExtractPromptContextCommand, ctx: PipelineCo
             mode_suffix=ctx.mode_suffix,
             api_key=ctx.api_key,
             model=ctx.model,
-            provider=ctx.provider,
+            provider_type=ctx.provider_type,
             max_tokens=ctx.max_tokens,
             sys_prompt=ctx.sys_prompt,
             conv_path=ctx.conv_path,
+            provider_options=ctx.provider_options,
         )
     except Exception as e:
         info.print(f"[red]aiv: {escape(str(e))}[/red]")
@@ -708,10 +702,11 @@ def cmd_prompt(cmd: PromptCommand, ctx: PipelineContext):
             mode_suffix=ctx.mode_suffix,
             api_key=ctx.api_key,
             model=ctx.model,
-            provider=ctx.provider,
+            provider_type=ctx.provider_type,
             max_tokens=ctx.max_tokens,
             sys_prompt=ctx.sys_prompt,
             conv_path=ctx.conv_path,
+            provider_options=ctx.provider_options,
         )
     except Exception as e:
         info.print(f"[red]aiv: {escape(str(e))}[/red]")
@@ -735,49 +730,59 @@ def cmd_set_model(cmd: SetModelCommand, ctx: PipelineContext):
 
 def cmd_set_provider(cmd: SetProviderCommand, ctx: PipelineContext):
     if cmd.provider is not None:
-        if cmd.provider not in VALID_PROVIDERS:
-            info.print(
-                f"[red]Invalid provider: {escape(cmd.provider)}. "
-                f"Must be one of {', '.join(VALID_PROVIDERS)}[/red]"
+        # Resolve all values before changing context. Unknown profile names
+        # must not affect runtime settings or persisted session state.
+        try:
+            settings = get_provider_settings(cmd.provider)
+            provider_type = settings["type"]
+            provider_options = deepcopy(settings["options"])
+            model = settings["model"] or ""
+            max_tokens = int(settings["max_tokens"])
+            key_path = (
+                Path(settings["api_key_file"]).expanduser().absolute()
+                if settings["api_key_file"]
+                else None
             )
-            return
+            api_key = settings["api_key"] or ""
+        except (ValueError, OSError) as e:
+            info.print(f"[red]{escape(str(e))}[/red]")
+            raise StopPipeline() from e
+
+        # Selecting a profile always reloads its defaults, even if it shares
+        # an implementation with the previous profile. Missing model/key values
+        # clear the previous profile's values rather than leaking across profiles.
         ctx.provider = cmd.provider
-        # Pull this provider's configured defaults unconditionally — switching
-        # provider always resets to that provider's own model/key/max_tokens,
-        # it never tries to remember a prior override made while a different
-        # provider was active (per design discussion).
-        settings = get_provider_settings(cmd.provider)
-        if settings["model"] is not None:
-            ctx.model = settings["model"]
-        ctx.max_tokens = int(settings["max_tokens"])
-        ctx.api_key_file = (
-            Path(settings["api_key_file"]).expanduser()
-            if settings["api_key_file"]
-            else None
-        )
-        if settings["api_key"] is not None:
-            ctx.api_key = settings["api_key"]
+        ctx.provider_type = provider_type
+        ctx.provider_options = provider_options
+        ctx.model = model
+        ctx.max_tokens = max_tokens
+        ctx.api_key_file = key_path
+        ctx.api_key = api_key
         _sync_session_state(ctx)
     if ctx.interactive:
-        info.print(f"[green]Provider set to: {escape(ctx.provider)}[/green]")
+        info.print(
+            f"[green]Provider set to: {escape(ctx.provider)} "
+            f"(type: {escape(ctx.provider_type)})[/green]"
+        )
 
 
 def cmd_set_api_key_file(cmd: SetApiKeyFileCommand, ctx: PipelineContext):
-    if not cmd.path.exists():
-        info.print(f"[red]api_key_file not found: {escape(str(cmd.path))}[/red]")
+    key_path = cmd.path.expanduser().absolute()
+    if not key_path.exists():
+        info.print(f"[red]api_key_file not found: {escape(str(key_path))}[/red]")
         return
     try:
-        key = cmd.path.read_text().strip()
+        key = key_path.read_text().strip()
     except OSError as e:
         info.print(f"[red]Could not read api_key_file: {escape(str(e))}[/red]")
         return
-    # Validated above before anything is mutated or persisted — a bad path
-    # never reaches ctx or session_state (see design discussion re: races).
+    # Validate before mutating context or persisting the path. Key material
+    # itself is never written to session_state.
     ctx.api_key = key
-    ctx.api_key_file = cmd.path
+    ctx.api_key_file = key_path
     _sync_session_state(ctx)
     if ctx.interactive:
-        info.print(f"[green]api_key set from: {escape(str(cmd.path))}[/green]")
+        info.print(f"[green]api_key set from: {escape(str(key_path))}[/green]")
 
 
 def cmd_set_max_tokens(cmd: SetMaxTokensCommand, ctx: PipelineContext):
@@ -804,17 +809,7 @@ def cmd_set_mode(cmd: SetModeCommand, ctx: PipelineContext):
 
 
 def cmd_set_prompt_suffix(cmd: SetPromptSuffixCommand, ctx: PipelineContext):
-    """
-    !suffix behavior depends on the mode in effect when it's invoked:
-      - mode == CHAT: overwrites ctx.mode_chat_suffix in place; mode stays CHAT.
-      - mode == CODE: overwrites ctx.mode_code_suffix in place; mode stays CODE.
-      - mode == DEFAULT or CUSTOM: unchanged legacy behavior — sets the ad-hoc
-        _mode_suffix override via the mode_suffix property setter, which also
-        forces mode to CUSTOM. This path is intentionally NOT persisted to
-        session_state (see _sync_session_state/apply_session_state) — it's a
-        purely in-memory, per-session override (e.g. REPL `!mode default` +
-        `!suffix ...`), gone once the process exits.
-    """
+    """Edit CHAT/CODE suffixes durably, or set an ephemeral CUSTOM suffix."""
     if cmd.suffix is not None:
         new_suffix = "\n\n" + cmd.suffix
         if ctx.mode == InteractionMode.CHAT:
@@ -944,14 +939,9 @@ def commands_from_args(args) -> list[Command]:
                 sub_args = item if isinstance(item, str) else ""
                 pending.append((spec.precedence, spec.parse(sub_args)))
         elif val is True:
-            # store_true flags
             pending.append((spec.precedence, spec.parse("")))
         else:
-            # nargs="?" with const=True: val may be True (flag with no argument)
-            # or a string (flag with argument). True means no argument was given,
-            # so pass "" rather than str(True) which would be treated as a range.
-            str_val = "" if val is True else str(val)
-            pending.append((spec.precedence, spec.parse(str_val)))
+            pending.append((spec.precedence, spec.parse(str(val))))
 
     # Inject positional prompt at its declared precedence
     prompt_text = " ".join(args.prompt) if getattr(args, "prompt", None) else ""
@@ -1016,7 +1006,6 @@ def run_command(cmd: Command, ctx: PipelineContext) -> None:
     elif isinstance(cmd, HelpCommand):
         cmd_help()
     elif isinstance(cmd, ReplCommand):
-        # Deferred import to avoid circular dependency: repl.py imports commands.py
         from aiv.repl import run_repl_loop
 
         run_repl_loop(ctx)
@@ -1044,14 +1033,3 @@ def run_pipeline(commands: list[Command], ctx: PipelineContext) -> None:
         sys.exit(1)
     except QuitPipeline:
         pass
-
-# Caveat: cmd_set_mode does NOT call _sync_session_state — mode itself (as
-# distinct from mode_chat_suffix/mode_code_suffix) was never in scope for
-# persistence per the design discussion; only the suffix CONTENT for CHAT/CODE
-# modes is diffable against config defaults, not which mode is currently active.
-#
-# Caveat: cmd_set_prompt_suffix's CHAT/CODE branches call _sync_session_state
-# directly rather than going through the mode_suffix property setter, since
-# that setter unconditionally forces CUSTOM — incompatible with "edit this
-# mode's suffix without leaving it." This is the key behavioral change enabling
-# the !mode chat / !suffix ... / (stays in chat mode, persists) workflow.

@@ -1,9 +1,13 @@
 from __future__ import annotations
-from typing import cast, Iterable
+
+from collections.abc import Iterable, Mapping
+from typing import cast
 
 import anthropic
 from anthropic.types import MessageParam
+
 from aiv.conversation import GenericMessageParam
+from aiv.providers import validate_provider_options
 
 
 class AnthropicProvider:
@@ -14,22 +18,15 @@ class AnthropicProvider:
         max_tokens: int,
         sys_prompt: str,
         api_key: str,
+        options: Mapping[str, object] | None = None,
     ) -> tuple[str, str | None]:
-        """
-        Call the Anthropic API with the given messages and return
-        (response_text, stop_reason).
-        Streams the response for lower latency on long outputs.
-        stop_reason is Optional in the SDK's types (None while streaming/incomplete
-        states), hence the str | None return type rather than str.
+        """Stream a response and return (response_text, stop_reason).
 
-        cache_control is passed as-is per existing working usage (automatic/implicit
-        caching against the stable prefix of system + prior turns) — not altered here.
-
-        The Provider protocol types `messages` as list[GenericMessageParam] so the
-        abstraction stays provider-agnostic; this module is the one place allowed to
-        know the dicts are also shaped like Anthropic's MessageParam, so the cast
-        below is a type-only assertion, not a runtime conversion.
+        No provider-specific options are currently supported. Preserve automatic
+        prompt caching against the stable prefix of system and prior turns.
         """
+        validate_provider_options(options, provider_type="anthropic")
+
         client = anthropic.Anthropic(api_key=api_key)
         msgparams = cast(Iterable[MessageParam], messages)
 
@@ -40,9 +37,7 @@ class AnthropicProvider:
             system=sys_prompt,
             cache_control={"type": "ephemeral"},
         ) as stream:
-            response_text = ""
-            for text in stream.text_stream:
-                response_text += text
+            response_text = "".join(stream.text_stream)
             final_message = stream.get_final_message()
 
         return response_text, final_message.stop_reason

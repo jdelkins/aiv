@@ -4,7 +4,6 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Callable
 
-from aiv.config import VALID_PROVIDERS
 from aiv.models import (
     InteractionMode,
     Command,
@@ -56,7 +55,7 @@ def _parse_context_arg(args: str) -> ContextCommand:
         return ContextCommand(path=args)
 
     if args.startswith("stdin"):
-        remainder = args[len("stdin"):]
+        remainder = args[len("stdin") :]
     elif args.startswith("-,"):
         remainder = args[1:]
     else:
@@ -90,7 +89,7 @@ def _parse_extract_arg(args: str) -> ExtractPromptContextCommand:
         return ExtractPromptContextCommand(path=args)
 
     if args.startswith("stdin"):
-        remainder = args[len("stdin"):]
+        remainder = args[len("stdin") :]
     elif args.startswith("-,"):
         remainder = args[1:]
     else:
@@ -122,28 +121,24 @@ class CommandSpec:
     )  # passed verbatim to add_argument()
     takes_path: bool = False  # completion hint: tab-complete args as filesystem path
     takes_dir: bool = False  # completion hint: tab-complete args as filesystem dirs
-    precedence: int = 50  # pipeline ordering: lower runs earlier; stable sort preserves
-    # registry order within equal precedence
+    precedence: int = 50  # lower runs earlier; registry order breaks ties
 
 
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 # Precedence bands:
-#   5   — working directory change (must run before conv_path is resolved)
-#   10  — destructive session reset (must run before anything reads state)
-#   19  — provider switch (must run before model/max_tokens/api-key-file, since
-#         cmd_set_provider pulls that provider's configured defaults for all
-#         three as a side effect of switching)
+#   5   — working directory change
+#   10  — destructive session reset
+#   19  — provider profile selection: loads implementation type, options, model,
+#         credentials, and token budget before explicit overrides
 #   20  — session configuration (model, max_tokens, api-key-file, mode,
-#         sys-prompt, prompt-marker) — all depend on provider already being
-#         resolved, hence running strictly after band 19
-#   25  — prompt suffix override (after mode, since !suffix's CHAT/CODE-in-place
-#         behavior depends on ctx.mode already reflecting the current mode)
-#   30  — context loading
-#   40  — prompt / main action
-#   50  — read-only display commands (history, show)
-#   90  — REPL handoff (always last; hands off control of the process)
+#         sys-prompt, prompt-marker)
+#   25  — prompt suffix edits (after mode selection)
+#   30  — context loading / extraction
+#   40  — prompt
+#   50  — read-only display commands
+#   90  — REPL handoff / exit
 
 COMMAND_SPECS: list[CommandSpec] = [
     CommandSpec(
@@ -173,15 +168,12 @@ COMMAND_SPECS: list[CommandSpec] = [
         names=("!provider",),
         long_option="--provider",
         short_option="-P",
-        usage=f"<{'|'.join(VALID_PROVIDERS)}>",
-        help="Set the API provider",
-        parse=lambda args: SetProviderCommand(
-            provider=args.strip() if args != "" else None
-        ),
+        usage="<provider>",
+        repl_usage="[provider]",
+        help="Select a named provider profile and load its configured defaults",
+        parse=lambda args: SetProviderCommand(provider=args.strip() or None),
         argparse_kwargs=dict(default=None, metavar="PROVIDER"),
-        precedence=19,  # must resolve before !model/!api-key-file/!max-tokens (all
-                         # 20), since cmd_set_provider pulls that provider's
-                         # configured defaults for all three as a side effect
+        precedence=19,
     ),
     CommandSpec(
         names=("!model",),
@@ -194,9 +186,6 @@ COMMAND_SPECS: list[CommandSpec] = [
         precedence=20,
     ),
     CommandSpec(
-        # Required argument: the path itself is not retained anywhere queryable,
-        # only its effect (api_key). No bare "show current value" form, unlike
-        # most other Set* specs, so argparse_kwargs omits nargs="?"/const=True.
         names=("!api-key-file",),
         long_option="--api-key-file",
         short_option=None,
@@ -252,8 +241,6 @@ COMMAND_SPECS: list[CommandSpec] = [
         precedence=20,
     ),
     CommandSpec(
-        # REPL-only: allows resetting mode to default mid-session
-        # usage: !mode, !mode chat, !mode code, !mode default
         names=("!mode",),
         long_option=None,
         short_option=None,
@@ -264,20 +251,13 @@ COMMAND_SPECS: list[CommandSpec] = [
                 "chat": InteractionMode.CHAT,
                 "code": InteractionMode.CODE,
                 "default": InteractionMode.DEFAULT,
-            }.get(
-                args.strip().lower()
-            )  # unrecognised or empty -> None (display the mode)
+            }.get(args.strip().lower())
         ),
         precedence=20,
     ),
     CommandSpec(
-        # Behavior depends on ctx.mode at the time it's invoked: in CHAT/CODE
-        # mode it edits that mode's persistent suffix in place (session-state
-        # eligible); otherwise it sets an ephemeral CUSTOM-mode override that
-        # is never persisted. See cmd_set_prompt_suffix in commands.py.
-        # precedence=25 (after mode-setting commands at 20) so that e.g.
-        # `aiv -X --prompt-suffix "..."` edits CODE's suffix, not DEFAULT's,
-        # regardless of flag order on the command line.
+        # CHAT/CODE edits are durable; other modes use an ephemeral override.
+        # Run after mode selection, regardless of CLI flag order.
         names=("!suffix",),
         long_option="--prompt-suffix",
         short_option=None,
@@ -321,12 +301,11 @@ COMMAND_SPECS: list[CommandSpec] = [
         takes_path=True,
         precedence=30,
     ),
-    # PromptCommand has no REPL !-command name (bare text is a prompt) and no
-    # long_option (positional args, not a flag). It lives here so commands_from_args
-    # can look up its precedence and emit it into the sorted pipeline correctly.
     CommandSpec(
-        names=(),  # bare text in REPL; not dispatched via COMMAND_LOOKUP
-        long_option=None,  # positional, not a flag; handled specially in commands_from_args
+        # Bare text is a prompt; commands_from_args handles the positional CLI
+        # argument separately using this spec's precedence.
+        names=(),
+        long_option=None,
         short_option=None,
         usage="<prompt>",
         help="Send a prompt to the model",
@@ -355,7 +334,7 @@ COMMAND_SPECS: list[CommandSpec] = [
     ),
     CommandSpec(
         names=("!delete",),
-        long_option=None,  # no CLI equivalent: requires interactive confirm
+        long_option=None,
         short_option=None,
         usage="<range>",
         help="Delete interactions with preview + confirm",
@@ -403,7 +382,7 @@ COMMAND_SPECS: list[CommandSpec] = [
     ),
     CommandSpec(
         names=("!quit", "!exit"),
-        long_option=None,  # no CLI equivalent: nonsensical outside REPL
+        long_option=None,
         short_option=None,
         usage="",
         help="End the session",
@@ -412,37 +391,21 @@ COMMAND_SPECS: list[CommandSpec] = [
     ),
 ]
 
+
 # ---------------------------------------------------------------------------
 # Lookup helpers
 # ---------------------------------------------------------------------------
 
-# Keyed by REPL name (e.g. "!history") -> CommandSpec
 COMMAND_LOOKUP: dict[str, CommandSpec] = {
     name: spec for spec in COMMAND_SPECS for name in spec.names
 }
 
-# Keyed by long_option (e.g. "--history") -> CommandSpec; excludes CLI-less specs
 OPTION_LOOKUP: dict[str, CommandSpec] = {
     spec.long_option: spec for spec in COMMAND_SPECS if spec.long_option
 }
 
-# Prompt spec reference — used by commands_from_args for positional arg injection
 PROMPT_SPEC: CommandSpec = next(
     s
     for s in COMMAND_SPECS
     if s.long_option is None and not s.names and not s.argparse_kwargs
 )
-
-# Caveat: no new CommandSpec entries were added for mode_chat_suffix/
-# mode_code_suffix per the decision to reuse the single !suffix/--prompt-suffix
-# spec for both — the branching on ctx.mode happens entirely inside
-# cmd_set_prompt_suffix (commands.py), not at the spec/parsing layer. The only
-# change to the !suffix spec itself is precedence 20->25 and an updated help
-# string reflecting its new mode-dependent behavior.
-#
-# Caveat: !suffix's precedence=25 placement (after !mode/!chat/!code at 20, but
-# before !context at 30) matters for a one-shot invocation like
-# `aiv -X --prompt-suffix "be extra terse"` — -X (SetModeCommand->CODE) must
-# resolve before --prompt-suffix so ctx.mode is already CODE when
-# cmd_set_prompt_suffix runs, otherwise it would take the DEFAULT/CUSTOM branch
-# instead of editing mode_code_suffix in place.

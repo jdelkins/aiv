@@ -7,29 +7,39 @@
 
 let
   cfg = config.programs.aiv;
+  tomlFormat = pkgs.formats.toml { };
 
-  # Mirrors aiv.config.VALID_PROVIDERS (aiv/config.py)
-  validProviders = [
+  # Mirrors aiv.config.VALID_PROVIDER_TYPES.
+  validProviderTypes = [
     "anthropic"
     "openai"
     "openai-reasoning"
   ];
 
-  # Per-provider submodule: mirrors a single [providers.<name>] table in
-  # config.toml. All fields are optional — a provider with no entry (or with
-  # some fields unset) falls back to the flat top-level apiKey/apiKeyFile/
-  # model/maxTokens options, exactly as aiv.config.get_provider_settings()
-  # does at runtime.
   providerOpts =
     { name, ... }:
     {
       options = {
+        type = lib.mkOption {
+          type = with lib.types; nullOr (enum validProviderTypes);
+          default = if lib.elem name validProviderTypes then name else null;
+          description = ''
+            Implementation type for the "${name}" provider profile.
+            Must be one of: ${lib.concatStringsSep ", " validProviderTypes}.
+            For compatibility, profiles named after a built-in implementation
+            infer their type from their name. Custom profile names must set
+            this option explicitly.
+          '';
+        };
+
         apiKey = lib.mkOption {
           type = with lib.types; nullOr str;
           default = null;
           description = ''
-            API key for the "${name}" provider, written directly into the aiv
-            config file. Mutually exclusive with apiKeyFile.
+            API key for the "${name}" provider profile, written directly into
+            the aiv config file. Mutually exclusive with apiKeyFile.
+            If neither credential option is set, the profile inherits the
+            top-level credential source.
             Warning: this value will be written to the Nix store. Prefer
             apiKeyFile with a secrets manager such as sops-nix or agenix.
           '';
@@ -39,9 +49,10 @@ let
           type = with lib.types; nullOr path;
           default = null;
           description = ''
-            Path to a file containing the API key for the "${name}" provider.
+            Path to a file containing the API key for the "${name}" profile.
             aiv reads and strips the file contents at runtime.
-            Mutually exclusive with apiKey.
+            Mutually exclusive with apiKey. If neither credential option is
+            set, the profile inherits the top-level credential source.
           '';
         };
 
@@ -49,8 +60,8 @@ let
           type = with lib.types; nullOr str;
           default = null;
           description = ''
-            Default model for the "${name}" provider. If null, falls back to
-            the top-level programs.aiv.model option.
+            Default model for the "${name}" provider profile. If null, falls
+            back to the top-level programs.aiv.model option.
           '';
         };
 
@@ -58,32 +69,53 @@ let
           type = with lib.types; nullOr ints.positive;
           default = null;
           description = ''
-            Maximum response tokens for the "${name}" provider. If null,
-            falls back to the top-level programs.aiv.maxTokens option.
+            Maximum response tokens for the "${name}" provider profile.
+            If null, falls back to programs.aiv.maxTokens.
+          '';
+        };
+
+        options = lib.mkOption {
+          type = tomlFormat.type;
+          default = { };
+          example = {
+            reasoning_effort = "high";
+          };
+          description = ''
+            Implementation-specific request options for this profile.
+            Written as [providers.<name>.options] in config.toml.
+            The selected implementation validates supported option names and
+            values at runtime; options are not forwarded blindly to the SDK.
+
+            The openai-reasoning implementation supports reasoning_effort.
+            Availability and accepted effort values depend on the model.
+            Other implementations currently accept no options.
+
+            Options are profile-local, have no top-level fallback, and cannot
+            currently be overridden through CLI flags or REPL commands.
+            Unspecified options preserve the API's defaults.
+            Do not place secrets here: values are written to the Nix store.
           '';
         };
       };
     };
 
-  # Build a single provider's TOML attrs, omitting unset keys so the tool's
-  # own fallback-to-top-level-config logic applies.
   providerToAttrs =
     p:
     lib.filterAttrs (_k: v: v != null) {
+      type = p.type;
       api_key = p.apiKey;
       api_key_file = p.apiKeyFile;
       model = p.model;
       max_tokens = p.maxTokens;
+    }
+    // lib.optionalAttrs (p.options != { }) {
+      options = p.options;
     };
 
   providersAttrs = lib.mapAttrs (_name: providerToAttrs) cfg.providers;
 
-  # Top-level (legacy/fallback) attribute set; omit optional keys when null so
-  # the tool's own defaults (or a matching [providers.<name>] entry) apply.
-  # apiKey/apiKeyFile here are now optional — they only need to be set if you
-  # want a fallback for providers with no dedicated entry in `providers`, or
-  # if you're using aiv with a single provider and never touch `providers` at
-  # all (the pre-multi-provider configuration shape).
+  # Credentials inherit as a pair. Model and token budget inherit independently.
+  # Implementation-specific options never inherit from the top level.
   topLevelAttrs = lib.filterAttrs (_k: v: v != null) {
     provider = cfg.provider;
     api_key = cfg.apiKey;
@@ -97,9 +129,14 @@ let
   };
 
   aivConfigAttrs =
-    topLevelAttrs // (lib.optionalAttrs (cfg.providers != { }) { providers = providersAttrs; });
+    topLevelAttrs
+    // lib.optionalAttrs (cfg.providers != { }) {
+      providers = providersAttrs;
+    };
 
-  aivConfigFile = (pkgs.formats.toml { }).generate "aiv-config.toml" aivConfigAttrs;
+  aivConfigFile = tomlFormat.generate "aiv-config.toml" aivConfigAttrs;
+
+  effectiveProvider = if cfg.provider == null then "anthropic" else cfg.provider;
 in
 {
   options.programs.aiv = {
@@ -112,12 +149,15 @@ in
     };
 
     provider = lib.mkOption {
-      type = with lib.types; nullOr (enum validProviders);
+      type = with lib.types; nullOr str;
       default = null;
+      example = "deep";
       description = ''
-        The default active provider used when no session_state override is
-        present. If null, the tool's own built-in default (anthropic) applies.
-        Must be one of: ${lib.concatStringsSep ", " validProviders}.
+        Default provider profile name used when no session_state override is
+        present. If null, aiv defaults to "anthropic".
+        Must name a configured profile or a legacy built-in implementation:
+        ${lib.concatStringsSep ", " validProviderTypes}.
+        Built-in names without a profile entry use top-level fallback settings.
       '';
     };
 
@@ -125,18 +165,37 @@ in
       type = lib.types.attrsOf (lib.types.submodule providerOpts);
       default = { };
       description = ''
-        Per-provider configuration, written as [providers.<name>] tables in
-        the aiv config file. Each attribute name must be a valid provider
-        (see the assertion below); a provider with no entry here falls back
-        to the top-level apiKey/apiKeyFile/model/maxTokens options.
+        Named provider profiles, written as [providers.<name>] tables.
+        Names may be arbitrary non-empty strings. Each custom-named profile
+        must specify an implementation type.
+
+        Missing model and maxTokens values inherit independently from the
+        top-level options. A profile with neither apiKey nor apiKeyFile
+        inherits the top-level credential source. Options remain profile-local.
+
+        Selecting a profile with -P/--provider or !provider loads all of its
+        defaults, even when the previous profile uses the same implementation.
+        Session state persists the profile name, not its type or options.
       '';
       example = lib.literalExpression ''
         {
-          anthropic.apiKeyFile = config.sops.secrets.anthropic-api-key.path;
-          openai.apiKeyFile = config.sops.secrets.openai-api-key.path;
-          openai.model = "gpt-4o-mini";
-          openai-reasoning.apiKeyFile = config.sops.secrets.openai-api-key.path;
-          openai-reasoning.model = "o3-mini";
+          claude = {
+            type = "anthropic";
+            apiKeyFile = config.sops.secrets.anthropic-api-key.path;
+            model = "claude-sonnet-4-6";
+          };
+          fast = {
+            type = "openai";
+            apiKeyFile = config.sops.secrets.openai-api-key.path;
+            model = "gpt-4o-mini";
+          };
+          deep = {
+            type = "openai-reasoning";
+            apiKeyFile = config.sops.secrets.openai-api-key.path;
+            model = "o3-mini";
+            maxTokens = 16384;
+            options.reasoning_effort = "high";
+          };
         }
       '';
     };
@@ -145,10 +204,10 @@ in
       type = with lib.types; nullOr str;
       default = null;
       description = ''
-        API key written directly into the top level of the aiv config file.
-        Acts as the fallback for any provider in `providers` without its own
-        apiKey/apiKeyFile set, or as the sole provider's key if `providers` is
-        left empty entirely. Mutually exclusive with apiKeyFile.
+        Top-level fallback API key, written directly into the aiv config file.
+        Used by profiles with neither apiKey nor apiKeyFile configured, and by
+        legacy built-in selections without a profile entry.
+        Mutually exclusive with apiKeyFile.
         Warning: this value will be written to the Nix store. Prefer apiKeyFile
         with a secrets manager such as sops-nix or agenix.
       '';
@@ -158,17 +217,23 @@ in
       type = with lib.types; nullOr path;
       default = null;
       description = ''
-        Path to a file containing the top-level fallback API key. aiv reads
-        and strips the file contents at runtime. Use this with sops-nix,
-        agenix, or any other secrets manager that delivers secrets as files.
+        Path to the top-level fallback API key file. aiv reads and strips its
+        contents at runtime. Used by profiles with neither credential option
+        configured, and by legacy built-in selections without a profile entry.
+        Use with sops-nix, agenix, or another file-based secrets manager.
         Mutually exclusive with apiKey.
       '';
     };
 
     model = lib.mkOption {
-      type = lib.types.str;
+      type = with lib.types; nullOr str;
       default = "claude-sonnet-4-6";
-      description = "Top-level fallback default model used by aiv.";
+      description = ''
+        Top-level fallback model. The default preserves legacy configurations.
+        Set to null to omit the fallback when each profile specifies its own
+        model. Requests without a resolved model fail rather than reusing the
+        previous profile's model.
+      '';
     };
 
     maxTokens = lib.mkOption {
@@ -181,7 +246,7 @@ in
       type = with lib.types; nullOr lines;
       default = null;
       description = ''
-        Default system prompt written to the aiv config file.
+        Default system prompt, shared by all profiles.
         If null, the tool's built-in default is used.
       '';
     };
@@ -190,7 +255,7 @@ in
       type = with lib.types; nullOr lines;
       default = null;
       description = ''
-        Prompt suffix to be added to prompts when the mode is "code".
+        Prompt suffix for code mode, shared by all profiles.
         If null, the tool's built-in default is used.
       '';
     };
@@ -199,7 +264,7 @@ in
       type = with lib.types; nullOr lines;
       default = null;
       description = ''
-        Prompt suffix to be added to prompts when the mode is "chat".
+        Prompt suffix for chat mode, shared by all profiles.
         If null, the tool's built-in default is used.
       '';
     };
@@ -208,8 +273,7 @@ in
       type = lib.types.str;
       default = "## prompt:";
       description = ''
-        Marker text for the prompt to be extracted from input provided
-        to "aiv --extract".
+        Marker text for extracting prompts from input to "aiv --extract".
       '';
     };
   };
@@ -221,17 +285,37 @@ in
         message = "programs.aiv: apiKey and apiKeyFile are mutually exclusive.";
       }
       {
-        assertion = lib.all (name: lib.elem name validProviders) (lib.attrNames cfg.providers);
+        assertion =
+          effectiveProvider != ""
+          && (
+            builtins.hasAttr effectiveProvider cfg.providers || lib.elem effectiveProvider validProviderTypes
+          );
         message = ''
-          programs.aiv: providers.<name> keys must be one of: ${lib.concatStringsSep ", " validProviders}.
-          Got: ${lib.concatStringsSep ", " (lib.attrNames cfg.providers)}
+          programs.aiv.provider must name a configured profile or a legacy
+          built-in implementation (${lib.concatStringsSep ", " validProviderTypes}).
+          Got: ${effectiveProvider}
         '';
       }
     ]
-    ++ (lib.mapAttrsToList (name: p: {
-      assertion = !(p.apiKey != null && p.apiKeyFile != null);
-      message = "programs.aiv.providers.${name}: apiKey and apiKeyFile are mutually exclusive.";
-    }) cfg.providers);
+    ++ lib.concatLists (
+      lib.mapAttrsToList (name: p: [
+        {
+          assertion = name != "";
+          message = "programs.aiv: provider profile names must be non-empty strings.";
+        }
+        {
+          assertion = p.type != null;
+          message = ''
+            programs.aiv.providers.${name}: custom provider profiles require type.
+            Must be one of: ${lib.concatStringsSep ", " validProviderTypes}.
+          '';
+        }
+        {
+          assertion = !(p.apiKey != null && p.apiKeyFile != null);
+          message = "programs.aiv.providers.${name}: apiKey and apiKeyFile are mutually exclusive.";
+        }
+      ]) cfg.providers
+    );
 
     home.packages = [ cfg.package ];
 
